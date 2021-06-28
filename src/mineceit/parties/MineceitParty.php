@@ -1,302 +1,393 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-08-15
- * Time: 18:20
- */
 
 declare(strict_types=1);
 
 namespace mineceit\parties;
 
 use mineceit\MineceitCore;
+use mineceit\MineceitUtil;
+use mineceit\player\language\Language;
 use mineceit\player\MineceitPlayer;
 use pocketmine\utils\TextFormat;
 
-class MineceitParty
-{
+class MineceitParty{
 
-    public const MAX_PLAYERS = 30;
+	public const MAX_PLAYERS = 8;
 
-    /* @var int */
-    private $maxPlayers;
+	/* @var int */
+	private $maxPlayers;
 
-    /* @var MineceitPlayer[]|array */
-    private $players;
+	/* @var MineceitPlayer[]|array */
+	private $players;
 
-    /* @var MineceitPlayer */
-    private $owner;
+	/* @var MineceitPlayer */
+	private $owner;
 
-    /* @var string */
-    private $name;
+	/* @var string */
+	private $name;
 
-    /* @var bool */
-    private $open;
+	/* @var string */
+	private $lowername;
 
-    /* @var string[]|array */
-    private $blacklisted;
+	/* @var bool */
+	private $open;
 
-    public function __construct(MineceitPlayer $owner, string $name, int $maxPlayers, bool $open = true)
-    {
-        $this->owner = $owner;
-        $this->name = $name;
-        $this->maxPlayers = $maxPlayers;
-        $local = strtolower($owner->getName());
-        $this->players = [$local => $owner];
-        $this->open = $open;
-        $this->blacklisted = [];
-    }
+	/* @var string[]|array */
+	private $blacklisted;
 
-    /**
-     * @param MineceitPlayer $player
-     */
-    public function addPlayer(MineceitPlayer $player) : void {
+	public function __construct(MineceitPlayer $owner, string $name, int $maxPlayers, bool $open = true){
+		$this->owner = $owner;
+		$this->name = $name;
+		$this->maxPlayers = $maxPlayers;
+		$local = strtolower($owner->getName());
+		$this->players = [$local => $owner];
+		$this->open = $open;
+		$this->blacklisted = [];
+		$this->lowername = strtolower($name);
+	}
 
-        $name = $player->getName();
+	/**
+	 * @param MineceitPlayer $player
+	 */
+	public function addPlayer(MineceitPlayer $player) : void{
 
-        $local = strtolower($name);
+		$name = $player->getName();
 
-        if(!isset($this->players[$local])) {
+		$local = strtolower($name);
 
-            $this->players[$local] = $player;
-            $itemHandler = MineceitCore::getItemHandler();
-            $itemHandler->spawnPartyItems($player);
+		if(!isset($this->players[$local])){
 
-            $duelHandler = MineceitCore::getDuelHandler();
-            if($duelHandler->isInQueue($player))
-                $duelHandler->removeFromQueue($player, false);
+			$this->players[$local] = $player;
+			$itemHandler = MineceitCore::getItemHandler();
+			$itemHandler->spawnPartyItems($player);
 
-            // TODO MESSAGE THAT A PLAYER HAS JOINED.
-        }
-    }
+			$duelHandler = MineceitCore::getDuelHandler();
+			if($duelHandler->isInQueue($player))
+				$duelHandler->removeFromQueue($player, false);
 
-    /**
-     * @param MineceitPlayer $player
-     * @param string $reason
-     * @param bool $blacklist
-     */
-    public function removePlayer(MineceitPlayer $player, string $reason = '', bool $blacklist = false) : void {
+			foreach($this->players as $member){
+				if($member->isOnline()){
+					$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $member->getLanguageInfo()->getLanguage()->generalMessage(Language::PLAYER_JOIN_PARTY, ["name" => $player->getDisplayName()]);
+					$member->sendMessage($msg);
+				}
+			}
+		}
+	}
 
-        $name = $player->getName();
+	/**
+	 * @param MineceitPlayer $player
+	 * @param string         $reason
+	 * @param bool           $blacklist
+	 */
+	public function removePlayer(MineceitPlayer $player, string $reason = '', bool $blacklist = false) : void{
 
-        $kicked = $reason !== '';
+		$name = $player->getName();
 
-        $local = strtolower($name);
+		$kicked = $reason !== '';
 
-        if(isset($this->players[$local])) {
+		$local = strtolower($name);
 
-            $itemHandler = MineceitCore::getItemHandler();
+		if(isset($this->players[$local])){
 
-            if($this->isOwner($player)) {
+			$itemHandler = MineceitCore::getItemHandler();
 
-                $partyManager = MineceitCore::getPartyManager();
+			MineceitCore::getPartyManager()->getEventManager()->removeFromQueue($this);
 
-                $partyManager->endParty($this);
+			if($this->isOwner($player)){
 
-                // TODO IF IN AN EVENT, DO END THE EVENT
+				$partyManager = MineceitCore::getPartyManager();
 
-                foreach($this->players as $p) {
-                    if($p->isOnline()) {
-                        $inHub = $p->isInHub();
-                        if(!$inHub) $p->reset(false, true);
-                        $itemHandler->spawnHubItems($p, $inHub);
-                    }
-                }
+				$partyEvent = $partyManager->getEventManager()->getPartyEvent($this);
 
-                // TODO BROADCAST MESSAGE THAT PARTY HAS ENDED
+				if($partyEvent !== null){
+					foreach($this->players as $p){
+						if($p->isOnline()){
+							$partyEvent->removeFromEvent($p);
+						}
+					}
+				}
 
-                return;
-            }
+				foreach($this->players as $member){
+					if($member->isOnline()){
+						$inHub = $member->isInHub();
+						if(!$inHub) $member->reset(true, true);
+						$itemHandler->spawnHubItems($member, $inHub);
+						$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $member->getLanguageInfo()->getLanguage()->generalMessage(Language::PLAYER_DISBAND_PARTY, ["name" => $player->getDisplayName()]);
+						$member->sendMessage($msg);
+					}
+				}
 
-            unset($this->players[$local]);
+				$partyManager->endParty($this);
 
-            $inHub = $player->isInHub();
+				return;
+			}
 
-            if(!$inHub)
-                $player->reset(false, true);
+			$inHub = $player->isInHub();
 
-            $itemHandler->spawnHubItems($player, $inHub);
+			if(!$inHub)
+				$player->reset(false, true);
 
-            if($kicked and $blacklist)
-                $this->blacklisted[] = $player->getName();
+			$itemHandler->spawnHubItems($player, $inHub);
 
-            // TODO BROADCAST MESSAGE THAT PLAYER LEFT OR IS KICKED WITH REASON
-        }
-    }
+			if($kicked && $blacklist)
+				$this->addToBlacklist($player);
 
-    /**
-     * @param MineceitPlayer|string $player
-     * @return bool
-     */
-    public function isPlayer($player) : bool {
-        $local = $player instanceof MineceitPlayer ? strtolower($player->getName()) : strtolower($player);
-        if(isset($this->players[$local])) {
-            return true;
-        }
+			foreach($this->players as $member){
+				if($member->isOnline()){
+					$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $member->getLanguageInfo()->getLanguage()->generalMessage(Language::PLAYER_LEAVE_PARTY, ["name" => $player->getDisplayName()]);
+					$member->sendMessage($msg);
+				}
+			}
 
-        foreach($this->players as $player) {
-            $displayName = strtolower($player->getDisplayName());
-            if($displayName === $local) {
-                return true;
-            }
-        }
+			unset($this->players[$local]);
+		}
+	}
 
-        return false;
-    }
+	/**
+	 * @param MineceitPlayer $player
+	 *
+	 * @return bool
+	 */
+	public function isOwner(MineceitPlayer $player) : bool{
+		return $this->owner->equalsPlayer($player);
+	}
 
-    /**
-     * @param MineceitPlayer $player
-     * @return bool
-     */
-    public function isOwner(MineceitPlayer $player) : bool {
-        return $this->owner->equalsPlayer($player);
-    }
+	/**
+	 * @param MineceitPlayer|string $player
+	 */
+	public function addToBlacklist($player) : void{
+		$name = ($player instanceof MineceitPlayer) ? $player->getName() : $player;
+		$this->blacklisted[] = $name;
 
-    /**
-     * @return string
-     */
-    public function getName() : string {
-        return $this->name;
-    }
+		if($player instanceof MineceitPlayer){
+			$name = $player->getDisplayName();
+		}else{
+			if(($player = MineceitUtil::getPlayerExact($name, true)) !== null && $player instanceof MineceitPlayer){
+				$name = $player->getDisplayName();
+			}
+		}
+		foreach($this->players as $member){
+			if($member->isOnline()){
+				$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $member->getLanguageInfo()->getLanguage()->generalMessage(Language::PLAYER_ADD_BLACKLIST, ["name" => $name]);
+				$member->sendMessage($msg);
+			}
+		}
+	}
 
-    /**
-     * @param bool $int
-     * @return array|int|MineceitPlayer[]
-     */
-    public function getPlayers(bool $int = false) {
-        return ($int) ? count($this->players) : $this->players;
-    }
+	/**
+	 * @param MineceitPlayer|string $player
+	 *
+	 * @return bool
+	 */
+	public function isPlayer($player) : bool{
+		$local = $player instanceof MineceitPlayer ? strtolower($player->getName()) : strtolower($player);
+		if(isset($this->players[$local])){
+			return true;
+		}
 
-    /**
-     * @return int
-     */
-    public function getMaxPlayers() : int {
-        return $this->maxPlayers;
-    }
+		foreach($this->players as $player){
+			$displayName = strtolower($player->getDisplayName());
+			if($displayName === $local){
+				return true;
+			}
+		}
 
-    /**
-     * @return bool
-     */
-    public function isOpen() : bool {
-        return $this->open;
-    }
+		return false;
+	}
 
-    /**
-     * @param bool $open
-     */
-    public function setOpen(bool $open = true) : void {
-        $this->open = $open;
-    }
+	/**
+	 * @param MineceitParty $party
+	 *
+	 * @return bool
+	 */
+	public function equalsParty(MineceitParty $party) : bool{
+		if($party !== null && $party instanceof MineceitParty)
+			return $party->getName() === $this->getName();
+		return false;
+		//return $player->getName() === $this->getName() && $player->getId() === $this->getId();
+	}
 
-    /**
-     * @param int $players
-     */
-    public function setMaxPlayers(int $players) : void {
-        $this->maxPlayers = $players;
-    }
+	/**
+	 * @return string
+	 */
+	public function getName() : string{
+		return $this->name;
+	}
 
-    /**
-     * @return string
-     */
-    public function getLocalName() : string {
-        $lower = strtolower($this->owner->getName()) . ':' . $this->getName();
-        return $lower;
-    }
+	/**
+	 * @return string
+	 */
+	public function getLowerName() : string{
+		return $this->lowername;
+	}
 
-    /**
-     * @param MineceitPlayer $player
-     */
-    public function promoteToOwner(MineceitPlayer $player) : void {
+	/**
+	 * @param bool $int
+	 *
+	 * @return array|int|MineceitPlayer[]
+	 */
+	public function getPlayers(bool $int = false){
+		return ($int) ? count($this->players) : $this->players;
+	}
 
-        $oldLocal = $this->getLocalName();
+	/**
+	 * @return int
+	 */
+	public function getMaxPlayers() : int{
+		return $this->maxPlayers;
+	}
 
-        $oldOwner = $this->owner;
+	/**
+	 * @param int $players
+	 */
+	public function setMaxPlayers(int $players) : void{
+		$this->maxPlayers = $players;
+	}
 
-        $this->owner = $player;
+	/**
+	 * @return bool
+	 */
+	public function isOpen() : bool{
+		return $this->open;
+	}
 
-        // TODO BROADCAST MESSAGE
-        $partyManager = MineceitCore::getPartyManager();
+	/**
+	 * @param bool $open
+	 */
+	public function setOpen(bool $open = true) : void{
+		$this->open = $open;
+	}
 
-        $newLocal = $this->getLocalName();
+	/**
+	 * @param MineceitPlayer $player
+	 */
+	public function promoteToOwner(MineceitPlayer $player) : void{
 
-        $itemHandler = MineceitCore::getItemHandler();
+		$max = 4;
+		$ranks = $player->getRanks(true);
+		foreach($ranks as $rank){
+			if($rank === "owner" || $rank === "admin" || $rank === "dev" || $rank === "mod" || $rank === "helper" || $rank === "famous" || $rank === "donatorplus" || $rank === "donator"){
+				if($max < 8) $max = 8;
+			}elseif($rank === "media" || $rank === "booster" || $rank === "voter" || $rank === "designer" || $rank === "builder"){
+				if($max < 6) $max = 6;
+			}
+		}
 
-        $itemHandler->spawnPartyItems($oldOwner);
-        $itemHandler->spawnPartyItems($this->owner);
+		if($this->maxPlayers > $max){
+			$this->owner->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $this->owner
+					->getLanguageInfo()->getLanguage()->generalMessage(
+						Language::CANT_PROMOTE_PARTY, ["name" => $player->getDisplayName()]));
+			return;
+		}
 
-        $partyManager->swapLocal($oldLocal, $newLocal);
-    }
+		$oldLocal = $this->getLocalName();
 
-    /**
-     * @return MineceitPlayer
-     */
-    public function getOwner() : MineceitPlayer {
-        return $this->owner;
-    }
+		$oldOwner = $this->owner;
 
-    /**
-     * @param string $name
-     * @return MineceitPlayer|null
-     */
-    public function getPlayer(string $name) {
-        $local = strtolower($name);
-        if(isset($this->players[$local])) {
-            return $this->players[$local];
-        }
+		$this->owner = $player;
 
-        foreach($this->players as $player) {
-            $displayName = strtolower($player->getDisplayName());
-            if($displayName === $name) {
-                return $player;
-            }
-        }
-        return null;
-    }
+		foreach($this->players as $member){
+			if($member->isOnline()){
+				$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $member
+						->getLanguageInfo()->getLanguage()->generalMessage(
+							Language::PLAYER_PROMOTE_PARTY, ["name" => $player->getDisplayName()]);
+				$member->sendMessage($msg);
+			}
+		}
 
+		$partyManager = MineceitCore::getPartyManager();
 
-    /**
-     * @param MineceitPlayer|string $player
-     * @return bool
-     */
-    public function isBlackListed($player) : bool {
-        $name = $player instanceof MineceitPlayer ? $player->getName() : $player;
-        return in_array($name, $this->blacklisted);
-    }
+		$newLocal = $this->getLocalName();
 
-    /**
-     * @param MineceitPlayer|string $player
-     */
-    public function addToBlacklist($player) : void {
-        $name = ($player instanceof MineceitPlayer) ? $player->getName() : $player;
-        $this->blacklisted[] = $name;
-        // TODO BROADCAST MESSAGE
-    }
+		$itemHandler = MineceitCore::getItemHandler();
 
-    /**
-     * @param MineceitPlayer|string $player
-     */
-    public function removeFromBlacklist($player) : void {
-        $name = ($player instanceof MineceitPlayer) ? $player->getName() : $player;
-        if(in_array($name, $this->blacklisted)) {
-            $index = array_search($name, $this->blacklisted);
-            unset($this->blacklisted[$index]);
-            $this->blacklisted = array_values($this->blacklisted);
-            // TODO BROADCAST MESSAGE
-        }
-    }
+		$itemHandler->spawnPartyItems($oldOwner);
+		$itemHandler->spawnPartyItems($this->owner);
 
-    /**
-     * @return array|string[]
-     */
-    public function getBlacklisted() : array {
-        return $this->blacklisted;
-    }
+		$partyManager->swapLocal($oldLocal, $newLocal);
+	}
 
-    /**
-     * @return string
-     */
-    public function getPrefix() : string {
-        return TextFormat::BOLD . TextFormat::DARK_GRAY . '[' . TextFormat::GREEN . $this->name . TextFormat::DARK_GRAY . ']' . TextFormat::RESET;
-    }
+	/**
+	 * @return string
+	 */
+	public function getLocalName() : string{
+		return strtolower($this->owner->getName()) . ':' . $this->getName();
+	}
+
+	/**
+	 * @return MineceitPlayer
+	 */
+	public function getOwner() : MineceitPlayer{
+		return $this->owner;
+	}
+
+	/**
+	 * @param string $name
+	 *
+	 * @return MineceitPlayer|null
+	 */
+	public function getPlayer(string $name) : ?MineceitPlayer{
+		$local = strtolower($name);
+		if(isset($this->players[$local])){
+			return $this->players[$local];
+		}
+
+		foreach($this->players as $player){
+			$displayName = strtolower($player->getDisplayName());
+			if($displayName === $name){
+				return $player;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * @param MineceitPlayer|string $player
+	 *
+	 * @return bool
+	 */
+	public function isBlackListed($player) : bool{
+		$name = $player instanceof MineceitPlayer ? $player->getName() : $player;
+		return in_array($name, $this->blacklisted);
+	}
+
+	/**
+	 * @param MineceitPlayer|string $player
+	 */
+	public function removeFromBlacklist($player) : void{
+		$name = ($player instanceof MineceitPlayer) ? $player->getName() : $player;
+		if(in_array($name, $this->blacklisted)){
+			$index = array_search($name, $this->blacklisted);
+			unset($this->blacklisted[$index]);
+			$this->blacklisted = array_values($this->blacklisted);
+
+			if($player instanceof MineceitPlayer){
+				$name = $player->getDisplayName();
+			}else{
+				if(($player = MineceitUtil::getPlayerExact($name, true)) !== null && $player instanceof MineceitPlayer){
+					$name = $player->getDisplayName();
+				}
+			}
+			foreach($this->players as $member){
+				if($member->isOnline()){
+					$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $member->getLanguageInfo()->getLanguage()->generalMessage(Language::PLAYER_REMOVE_BLACKLIST, ["name" => $name]);
+					$member->sendMessage($msg);
+				}
+			}
+		}
+	}
+
+	/**
+	 * @return array|string[]
+	 */
+	public function getBlacklisted() : array{
+		return $this->blacklisted;
+	}
+
+	/**
+	 * @return string
+	 */
+	public function getPrefix() : string{
+		return TextFormat::BOLD . TextFormat::DARK_GRAY . '[' . TextFormat::GREEN . $this->name . TextFormat::DARK_GRAY . ']' . TextFormat::RESET;
+	}
 }

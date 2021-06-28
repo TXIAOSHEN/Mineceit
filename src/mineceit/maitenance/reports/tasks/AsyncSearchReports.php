@@ -1,10 +1,4 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2020-01-13
- * Time: 12:55
- */
 
 declare(strict_types=1);
 
@@ -17,218 +11,215 @@ use mineceit\player\MineceitPlayer;
 use pocketmine\scheduler\AsyncTask;
 use pocketmine\Server;
 
-class AsyncSearchReports extends AsyncTask
-{
+class AsyncSearchReports extends AsyncTask{
 
-    /** @var string */
-    private $name;
+	/** @var string */
+	private $name;
 
-    /** @var string */
-    private $searched;
+	/** @var string */
+	private $searched;
 
-    /** @var int */
-    private $timeDifference;
+	/** @var int */
+	private $timeDifference;
 
-    /** @var array */
-    private $reportTypes;
+	/** @var array */
+	private $reportTypes;
 
-    /** @var array|string[] */
-    private $serializedReports;
+	/** @var array|string[] */
+	private $serializedReports;
 
-    /** @var bool|null */
-    private $resolved;
+	/** @var bool|null */
+	private $resolved;
 
-    /**
-     * AsyncSearchReports constructor.
-     * @param string $player
-     * @param string $searched
-     * @param int $timespan
-     * @param array $reportTypes
-     * @param array|ReportInfo[] $reports
-     * @param int $resolved
-     */
-    public function __construct(string $player, string $searched, int $timespan, array $reportTypes, array $reports, int $resolved)
-    {
-        $this->name = $player;
-        $this->searched = trim(strtolower($searched));
+	/**
+	 * AsyncSearchReports constructor.
+	 *
+	 * @param string             $player
+	 * @param string             $searched
+	 * @param int                $timespan
+	 * @param array              $reportTypes
+	 * @param array|ReportInfo[] $reports
+	 * @param int                $resolved
+	 */
+	public function __construct(string $player, string $searched, int $timespan, array $reportTypes, array $reports, int $resolved){
+		$this->name = $player;
+		$this->searched = trim(strtolower($searched));
 
-        $difference = -1;
-        switch($timespan) {
-            case 1:
-                $difference = 3600; // last hour
-                break;
-            case 2:
-                $difference = 43200; // last 12 hours
-                break;
-            case 3:
-                $difference = 86400; // last day
-                break;
-            case 4:
-                $difference = 604800; // last week
-                break;
-            case 5:
-                $difference = 2592000; // last month
-                break;
-        }
+		$difference = -1;
+		switch($timespan){
+			case 1:
+				$difference = 3600; // last hour
+				break;
+			case 2:
+				$difference = 43200; // last 12 hours
+				break;
+			case 3:
+				$difference = 86400; // last day
+				break;
+			case 4:
+				$difference = 604800; // last week
+				break;
+			case 5:
+				$difference = 2592000; // last month
+				break;
+		}
 
-        $resolvedOutput = null;
-        if($resolved !== 0) {
-            $resolvedOutput = $resolved === 2;
-        }
+		$resolvedOutput = null;
+		if($resolved !== 0){
+			$resolvedOutput = $resolved === 2;
+		}
 
-        $this->resolved = $resolvedOutput;
+		$this->resolved = $resolvedOutput;
 
-        $this->timeDifference = $difference;
+		$this->timeDifference = $difference;
 
-        $theReports = [];
+		$theReports = [];
 
-        foreach($reports as $report) {
-            $theReports[$report->getTimestamp()] = json_encode($report->serialize());
-        }
+		foreach($reports as $report){
+			$theReports[$report->getTimestamp()] = json_encode($report->serialize());
+		}
 
-        $this->serializedReports = $theReports;
+		$this->serializedReports = $theReports;
 
-        $types = [];
-        foreach($reportTypes as $type => $value) {
-            if($value) {
-                $types[$type] = true;
-            }
-        }
+		$types = [];
+		foreach($reportTypes as $type => $value){
+			if($value){
+				$types[$type] = true;
+			}
+		}
 
-        $this->reportTypes = $types;
-    }
+		$this->reportTypes = $types;
+	}
 
-    /**
-     * Actions to execute when run
-     *
-     * @return void
-     */
-    public function onRun()
-    {
+	/**
+	 * Actions to execute when run
+	 *
+	 * @return void
+	 */
+	public function onRun(){
 
-        $now = time();
+		$now = time();
 
-        $reports = (array)$this->serializedReports;
+		$reports = (array) $this->serializedReports;
 
-        // Checks if there is at least one report.
-        if(count($reports) <= 0) {
-            return;
-        }
+		// Checks if there is at least one report.
+		if(count($reports) <= 0){
+			return;
+		}
 
-        $reports = array_map(function(string $encoded) {
-            return json_decode($encoded, true);
-        }, $reports);
+		$reports = array_map(function(string $encoded){
+			return json_decode($encoded, true);
+		}, $reports);
 
-        // Checks if there is at least more than one report type checked off.
-        $reportTypes = (array)$this->reportTypes;
+		// Checks if there is at least more than one report type checked off.
+		$reportTypes = (array) $this->reportTypes;
 
-        if(count($reportTypes) <= 0) {
-            return;
-        }
+		if(count($reportTypes) <= 0){
+			return;
+		}
 
-        $outputReports = [];
+		$outputReports = [];
 
-        foreach($reports as $timestamp => $report) {
+		foreach($reports as $timestamp => $report){
 
-            $reportType = (int)$report['type'];
+			$reportType = (int) $report['type'];
 
-            if(isset($reportTypes[$reportType])) {
+			if(isset($reportTypes[$reportType])){
 
-                if($this->timeDifference !== -1) {
-                    $difference = intval($now - $timestamp);
-                    if($difference > $this->timeDifference) {
-                        continue;
-                    }
-                }
+				if($this->timeDifference !== -1){
+					$difference = intval($now - $timestamp);
+					if($difference > $this->timeDifference){
+						continue;
+					}
+				}
 
-                if($this->resolved !== null) {
-                    $resolved = (bool)$report['resolved'];
-                    if($this->resolved !== $resolved) {
-                        continue;
-                    }
-                }
+				if($this->resolved !== null){
+					$resolved = (bool) $report['resolved'];
+					if($this->resolved !== $resolved){
+						continue;
+					}
+				}
 
-                if($this->searched !== "") {
+				if($this->searched !== ""){
 
-                    $reporter = (string)$report['reporter'];
-                    $lower = trim(strtolower($reporter));
+					$reporter = (string) $report['reporter'];
+					$lower = trim(strtolower($reporter));
 
-                    if($lower === $this->searched or strpos($lower, $this->searched) !== false) {
-                        $outputReports[$timestamp] = $report;
-                        continue;
-                    }
+					if($lower === $this->searched || strpos($lower, $this->searched) !== false){
+						$outputReports[$timestamp] = $report;
+						continue;
+					}
 
-                    if(isset($report['lang'])) {
-                        $language = (array)$report['lang'];
-                        $found = false;
-                        foreach($language as $key => $value) {
-                            $lower = trim(strtolower(strval($value)));
-                            if(strpos($lower, $this->searched) !== false) {
-                                $outputReports[$timestamp] = $report;
-                                $found = true;
-                                continue;
-                            }
-                        }
+					if(isset($report['lang'])){
+						$language = (array) $report['lang'];
+						$found = false;
+						foreach($language as $key => $value){
+							$lower = trim(strtolower(strval($value)));
+							if(strpos($lower, $this->searched) !== false){
+								$outputReports[$timestamp] = $report;
+								$found = true;
+								continue;
+							}
+						}
 
-                        if($found) {
-                            continue;
-                        }
-                    }
+						if($found){
+							continue;
+						}
+					}
 
-                    if(isset($report['reported'])) {
-                        $reported = (string)$report['reported'];
-                        $lower = trim(strtolower($reported));
-                        if($lower === $this->searched or strpos($lower, strtolower($this->searched)) !== false) {
-                            $outputReports[$timestamp] = $report;
-                        }
-                    }
+					if(isset($report['reported'])){
+						$reported = (string) $report['reported'];
+						$lower = trim(strtolower($reported));
+						if($lower === $this->searched || strpos($lower, strtolower($this->searched)) !== false){
+							$outputReports[$timestamp] = $report;
+						}
+					}
 
-                    continue;
-                }
+					continue;
+				}
 
-                $outputReports[$timestamp] = $report;
-            }
-        }
+				$outputReports[$timestamp] = $report;
+			}
+		}
 
-        $reports = $outputReports;
+		$reports = $outputReports;
 
-        $this->setResult(['reports' => $reports]);
-    }
+		$this->setResult(['reports' => $reports]);
+	}
 
 
-    public function onCompletion(Server $server)
-    {
-        $core = $server->getPluginManager()->getPlugin('Mineceit');
+	public function onCompletion(Server $server){
+		$core = $server->getPluginManager()->getPlugin('Mineceit');
 
-        $result = $this->getResult();
+		$result = $this->getResult();
 
-        if($core instanceof MineceitCore and $core->isEnabled()) {
+		if($core instanceof MineceitCore && $core->isEnabled()){
 
-            $reportManager = MineceitCore::getReportManager();
+			$reportManager = MineceitCore::getReportManager();
 
-            $result = $result ?? ['reports' => []];
+			$result = $result ?? ['reports' => []];
 
-            $reports = (array)$result['reports'];
+			$reports = (array) $result['reports'];
 
-            if (($player = $server->getPlayer($this->name)) !== null and $player instanceof MineceitPlayer) {
+			if(($player = $server->getPlayer($this->name)) !== null && $player instanceof MineceitPlayer){
 
-                if ($player->isInHub() or ($player->isInEvent() and !$player->isInEventDuel())) {
+				if($player->isInHub() || ($player->isInEvent() && !$player->isInEventDuel() && !$player->isInEventBoss())){
 
-                    $theReports = [];
+					$theReports = [];
 
-                    foreach($reports as $reportData) {
-                        $localName = $reportData['local'];
-                        if(($report = $reportManager->getReport($localName)) !== null and $report instanceof ReportInfo) {
-                            $theReports[$report->getTimestamp()] = $report;
-                        }
-                    }
+					foreach($reports as $reportData){
+						$localName = $reportData['local'];
+						if(($report = $reportManager->getReport($localName)) !== null && $report instanceof ReportInfo){
+							$theReports[$report->getTimestamp()] = $report;
+						}
+					}
 
-                    krsort($theReports);
+					krsort($theReports);
 
-                    $form = FormUtil::getListOfReports($player, $theReports);
-                    $player->sendFormWindow($form, ['reports' => array_values($theReports), 'history' => false, 'perm' => $player->getReportPermissions()]);
-                }
-            }
-        }
-    }
+					$form = FormUtil::getListOfReports($player, $theReports);
+					$player->sendFormWindow($form, ['reports' => array_values($theReports), 'history' => false, 'perm' => $player->getReportPermissions()]);
+				}
+			}
+		}
+	}
 }

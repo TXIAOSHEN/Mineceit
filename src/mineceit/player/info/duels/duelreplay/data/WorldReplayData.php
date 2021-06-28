@@ -1,184 +1,120 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-10-25
- * Time: 17:52
- */
 
 declare(strict_types=1);
 
 namespace mineceit\player\info\duels\duelreplay\data;
 
+use mineceit\arenas\DuelArena;
 use pocketmine\block\Block;
-use pocketmine\level\Level;
-use pocketmine\math\Vector3;
 
-class WorldReplayData extends ReplayData
-{
+class WorldReplayData extends ReplayData{
+	/*
+	 * @var array
+	 * The temp array for the block data.
+	 */
+	private $tempBlockData;
+	/* @var array
+	 * For determining when a block was updated -> eg. break, place, etc.
+	 */
+	private $blockTimes;
 
-    const TYPE_DUEL = "type_duel";
-    const TYPE_SUMO = "type_sumo";
-    const TYPE_SPLEEF = "type_spleef";
+	/* @var DuelArena
+	 * For determining the arena.
+	 */
+	private $arena;
 
-    /* @var array
-     * For determining when a block was updated -> eg. break, place, etc.
-     */
-    private $blockTimes;
+	/* @var bool
+	 * Determines if the duel was ranked.
+	 */
+	private $ranked;
 
-    /* @var string
-     * For determining the world type -> uses the generator class.
-     */
-    private $worldType;
+	public function __construct(DuelArena $arena, bool $ranked){
+		$this->arena = $arena;
+		$this->blockTimes = [];
+		$this->tempBlockData = [];
+		$this->ranked = $ranked;
+	}
 
-    /* @var bool
-     * Determines if the duel was ranked.
-     */
-    private $ranked;
+	/**
+	 * @param int       $tick
+	 * @param Block|int $block
+	 * @param bool      $break
+	 */
+	public function setBlockAt(int $tick, Block $block, bool $break = false) : void{
 
-    /** @var string */
-    private $generatorClass;
+		if($break){
+			$newBlockData = new BlockData(Block::get(Block::AIR), $tick);
+			$newBlockData->setPosition((int) $block->x, (int) $block->y, (int) $block->z);
+		}else{
+			$newBlockData = new BlockData($block, $tick);
+		}
 
-    public function __construct(string $worldType, bool $ranked, string $generatorClass)
-    {
-        $this->worldType = $worldType;
-        $this->blockTimes = [];
-        $this->ranked = $ranked;
-        $this->generatorClass = $generatorClass;
-    }
+		$strPos = $newBlockData->getPositionAsString();
+		if(isset($this->tempBlockData[$strPos])){
+			$prevBlockData = $this->tempBlockData[$strPos];
+		}else{
+			$prevBlockData = new BlockData(Block::get(Block::AIR), 0);
+			$prevBlockData->setPosition((int) $block->x, (int) $block->y, (int) $block->z);
+		}
+		$prevBlockData->setNextBlockData($newBlockData);
+		$newBlockData->setPrevBlockData($prevBlockData);
+		$this->blockTimes[$prevBlockData->getTickUpdated()][$strPos] = $prevBlockData;
+		$this->tempBlockData[$strPos] = $newBlockData;
+		$this->blockTimes[$tick][$strPos] = $newBlockData;
+	}
 
-    /**
-     * @param int $tick
-     * @param Block|int $block
-     * @param Vector3 $pos
-     * @param $meta
-     *
-     * Saves when a block is placed and broken at a given tick based on position.
-     */
-    public function setBlockAt(int $tick, $block, Vector3 $pos = null, int $meta = 0) : void {
+	/**
+	 * @param int  $tick
+	 * @param bool $approximate - Gets the blocks that are less than this tick, marking this true is more expensive.
+	 *
+	 * Gets the blocks at a particular tick.
+	 *
+	 * @return array
+	 */
+	public function getBlocksAt(int $tick, bool $approximate = false) : array{
+		if(!$approximate){
+			if(isset($this->blockTimes[$tick]))
+				return $this->blockTimes[$tick];
+			return [];
+		}
 
-        $blockData = null;
+		$outputBlocks = [];
+		foreach($this->tempBlockData as $tempBlockPos => $blockData){
+			if($blockData instanceof BlockData){
+				$position = $blockData->getPosition();
 
-        if($block instanceof Block)
-            $blockData = new BlockData($block);
-        elseif (is_int($block) and $pos !== null)
-            $blockData = new BlockData($block, $meta, $pos);
+				$currentBlockData = $blockData;
+				while(
+					$currentBlockData !== null
+					&& $currentBlockData->getTickUpdated() > 0
+					&& $currentBlockData->getTickUpdated() > $tick
+				){
+					$currentBlockData = $currentBlockData->getPrevBlockData();
+				}
 
-        $blockTime = $this->blockTimes[$tick];
+				if($currentBlockData === null){
+					$inputBlockData = new BlockData(Block::get(Block::AIR), $tick);
+					$inputBlockData->setPosition($position->x, $position->y, $position->z);
+					$outputBlocks[$tempBlockPos] = $inputBlockData;
+					continue;
+				}
+				$outputBlocks[$tempBlockPos] = $currentBlockData;
+			}
+		}
+		return $outputBlocks;
+	}
 
-        if($blockData !== null) {
+	/**
+	 * @return DuelArena
+	 */
+	public function getArena() : DuelArena{
+		return $this->arena;
+	}
 
-            $strPos = null;
-
-            if($pos !== null) {
-                $x = (int)$pos->x;
-                $y = (int)$pos->y;
-                $z = (int)$pos->z;
-                $strPos = "$x:$y:$z";
-            } else {
-                $x = (int)$block->x;
-                $y = (int)$block->y;
-                $z = (int)$block->z;
-                $strPos = "$x:$y:$z";
-            }
-
-            $id = 0;
-            $meta = 0;
-            if($pos !== null and $pos instanceof Block) {
-                $id = $pos->getId();
-                $meta = $pos->getDamage();
-            }
-
-            $blockTime[$strPos] = $blockData;
-
-            $this->blockTimes[$tick] = $blockTime;
-
-            $lastTick = $tick - 1;
-
-            while($lastTick >= 0) {
-
-                if(!isset($this->blockTimes[$lastTick]))
-                    $this->blockTimes[$lastTick] = [];
-
-                if(!isset($this->blockTimes[$lastTick][$strPos])) {
-                    $this->blockTimes[$lastTick][$strPos] = new BlockData($id, $meta, $blockData->getPosition());
-                } else {
-                    return;
-                }
-
-                $lastTick--;
-            }
-        }
-    }
-
-    /**
-     * @param int $tick
-     * @param Level|null $level
-     *
-     * Updates the blocks.
-     */
-    public function update(int $tick, ?Level $level) : void {
-
-        $lastTick = $tick - 1;
-
-        if($lastTick >= 0 and isset($this->blockTimes[$lastTick]))
-            $this->blockTimes[$tick] = $this->blockTimes[$lastTick];
-        else $this->blockTimes[$tick] = [];
-
-        if($level !== null and isset($this->blockTimes[$lastTick])) {
-            $currentBlockTimes = $this->blockTimes[$tick];
-            $lastBlockTimes = $this->blockTimes[$lastTick];
-            $lastKeys = array_keys($lastBlockTimes);
-            foreach ($lastKeys as $lastKey) {
-                /* @var BlockData $lastBlockData */
-                $lastBlockData = $lastBlockTimes[$lastKey];
-                $lastBlock = $lastBlockData->getBlock();
-                $pos = $lastBlockData->getPosition();
-                $block = $level->getBlock($pos);
-                if($lastBlock->getId() !== $block->getId() or ($lastBlock->getId() === $block->getId() and $lastBlock->getDamage() !== $block->getDamage()))
-                    $currentBlockTimes[$lastKey] = new BlockData($block);
-            }
-            $this->blockTimes[$tick] = $currentBlockTimes;
-        }
-    }
-
-    /**
-     * @param int $tick
-     * @return array
-     *
-     * Gets the editions that occur within the world at a particular tick.
-     */
-    public function getAttributesAt(int $tick) : array {
-
-        $result = [];
-
-        if(isset($this->blockTimes[$tick]))
-            $result['blocks'] = $this->blockTimes[$tick];
-
-        return $result;
-    }
-
-    /**
-     * @return string
-     */
-    public function getWorldType() : string {
-        return $this->worldType;
-    }
-
-
-    /**
-     * @return string
-     *
-     * Gets the generator class from its world type.
-     */
-    public function getGeneratorClass() : string {
-        return $this->generatorClass;
-    }
-
-    /**
-     * @return bool
-     */
-    public function isRanked() : bool {
-        return $this->ranked;
-    }
+	/**
+	 * @return bool
+	 */
+	public function isRanked() : bool{
+		return $this->ranked;
+	}
 }

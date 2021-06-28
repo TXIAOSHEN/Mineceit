@@ -1,10 +1,4 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-07-23
- * Time: 16:28
- */
 
 declare(strict_types=1);
 
@@ -19,70 +13,75 @@ use pocketmine\command\CommandSender;
 use pocketmine\command\utils\CommandException;
 use pocketmine\utils\TextFormat;
 
-class CreateArena extends MineceitCommand
-{
+class CreateArena extends MineceitCommand{
 
-    public function __construct()
-    {
-        parent::__construct('createArena', 'Creates an arena with a specified kit.', 'Usage: /createArena <name> <kit>', ['createarena', 'arena-create']);
-        parent::setPermission('mineceit.permission.toggle-arenas');
-    }
+	public function __construct(){
+		parent::__construct('createarena', 'Creates an arena with a specified kit.', 'Usage: /createarena <name> <kit>', []);
+		parent::setPermission('mineceit.permission.toggle-arenas');
+	}
 
-    /**
-     * @param CommandSender $sender
-     * @param string $commandLabel
-     * @param string[] $args
-     *
-     * @return mixed
-     * @throws CommandException
-     */
-    public function execute(CommandSender $sender, string $commandLabel, array $args)
-    {
-        $msg = null;
+	/**
+	 * @param CommandSender $sender
+	 * @param string        $commandLabel
+	 * @param string[]      $args
+	 *
+	 * @return mixed
+	 * @throws CommandException
+	 */
+	public function execute(CommandSender $sender, string $commandLabel, array $args){
+		$msg = null;
 
-        $arenaHandler = MineceitCore::getArenas();
+		$arenaHandler = MineceitCore::getArenas();
 
-        if ($sender instanceof MineceitPlayer) {
+		if($sender instanceof MineceitPlayer){
 
-            $p = $sender->getPlayer();
+			$p = $sender->getPlayer();
+			$language = $p->getLanguageInfo()->getLanguage();
+			if($this->testPermission($sender) && $this->canUseCommand($sender)){
+				$size = count($args);
+				if($size === 2){
+					$arenaName = strval($args[0]);
+					$kit = MineceitCore::getKits()->getKit(
+						$kitName = strval($args[1]));
+					if($kit === null){
+						$sender->sendMessage(
+							$language->kitMessage($kitName, Language::KIT_NO_EXIST));
+						return true;
+					}
 
-            $language = $p->getLanguage();
+					if(!$kit->getMiscKitInfo()->isFFAEnabled()){
+						// TODO: Send message
+						return true;
+					}
 
-            if ($this->testPermission($sender) and $this->canUseCommand($sender)) {
+					$arena = $arenaHandler->getArena($arenaName);
+					if($arena !== null){
+						$sender->sendMessage(
+							$language->arenaMessage(Language::ARENA_EXISTS, $arena));
+						return true;
+					}
 
-                $size = count($args);
+					$arenaHandler->createArena($arenaName, $kit->getLocalizedName(), $p, 'FFA');
+					$sender->sendMessage(
+						$language->arenaMessage(Language::CREATE_ARENA, $arenaName));
+					return true;
+				}else{
+					$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $this->getUsage();
+				}
+			}
+		}else $msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RED . "Console can't use this command.";
 
-                if ($size === 2) {
+		if($msg !== null) $sender->sendMessage($msg);
 
-                    $arenaName = strval($args[0]);
+		return true;
+	}
 
-                    $kitName = strval($args[1]);
+	public function testPermission(CommandSender $sender) : bool{
 
-                    $kitHandler = MineceitCore::getKits();
+		if($sender instanceof MineceitPlayer && $sender->hasOwnerPermissions()){
+			return true;
+		}
 
-                    if ($kitHandler->isKit($kitName)) {
-
-                        $kit = $kitHandler->getKit($kitName);
-
-                        $arena = $arenaHandler->getArena($arenaName);
-
-                        if ($arena !== null) {
-
-                            $msg = $language->arenaMessage(Language::ARENA_EXISTS, $arena);
-
-                        } else {
-
-                            $arenaHandler->createArena($arenaName, $kit->getLocalizedName(), $p);
-                            $msg = $language->arenaMessage(Language::CREATE_ARENA, $arenaName);
-                        }
-
-                    } else $msg = $language->kitMessage($kitName, Language::KIT_NO_EXIST);
-                } else $msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $this->getUsage();
-            }
-        } else $msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RED . "Console can't use this command.";
-
-        if ($msg !== null) $sender->sendMessage($msg);
-
-        return true;
-    }
+		return parent::testPermission($sender);
+	}
 }

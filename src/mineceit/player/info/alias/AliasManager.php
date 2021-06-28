@@ -1,15 +1,8 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2020-01-16
- * Time: 23:24
- */
 
 declare(strict_types=1);
 
 namespace mineceit\player\info\alias;
-
 
 use mineceit\MineceitCore;
 use mineceit\player\info\alias\tasks\AsyncLoadAliases;
@@ -17,165 +10,161 @@ use mineceit\player\info\alias\tasks\AsyncSaveAliases;
 use mineceit\player\MineceitPlayer;
 use pocketmine\Server;
 
-class AliasManager
-{
+class AliasManager{
 
-    // CID IS NOT USED HERE ANY MORE.
+	// CID IS NOT USED HERE ANY MORE.
 
-    /** @var array */
-    private $ipAliases;
+	/** @var array */
+	private $ipAliases;
 
-    /** @var array */
-    private $uuidAliases;
-    /** @var array */
-    private $fuuidAliases; // The uuid aliases that came from the file.
+	/** @var array */
+	private $uuidAliases;
+	/** @var array */
+	private $fuuidAliases; // The uuid aliases that came from the file.
 
-    /** @var array */
-    private $cidAliases;
+	/** @var array */
+	private $cidAliases;
 
-    /** @var string */
-    private $dir;
+	/** @var string */
+	private $dir;
 
-    /** @var MineceitCore */
-    private $core;
+	/** @var string */
+	private $uuidFile, $cidFile;
 
-    /** @var string */
-    private $uuidFile, $cidFile;
+	/** @var Server */
+	private $server;
 
-    /** @var Server */
-    private $server;
+	public function __construct(MineceitCore $core){
+		$this->dir = $core->getDataFolder() . 'aliases/';
+		$this->ipAliases = [];
+		$this->cidAliases = [];
+		$this->uuidAliases = [];
+		$this->fuuidAliases = [];
 
-    public function __construct(MineceitCore $core)
-    {
-        $this->core = $core;
-        $this->dir = $core->getDataFolder() . 'aliases/';
-        $this->ipAliases = [];
-        $this->cidAliases = [];
-        $this->uuidAliases = [];
-        $this->fuuidAliases = [];
+		$this->server = $core->getServer();
 
-        $this->server = $core->getServer();
-
-        $this->init();
-    }
+		$this->init();
+	}
 
 
-    /**
-     * Initializes everything & loads the aliases.
-     */
-    private function init() : void {
+	/**
+	 * Initializes everything & loads the aliases.
+	 */
+	private function init() : void{
 
-        if(!is_dir($this->dir)) {
-            mkdir($this->dir);
-        }
+		if(!is_dir($this->dir)){
+			mkdir($this->dir);
+		}
 
-        $this->uuidFile = $this->dir . 'uuid-aliases.yml';
-        $this->cidFile = $this->dir . 'cid-aliases.yml';
+		$this->uuidFile = $this->dir . 'uuid-aliases.yml';
+		$this->cidFile = $this->dir . 'cid-aliases.yml';
 
-        $task = new AsyncLoadAliases($this->cidFile, $this->uuidFile);
-        $this->server->getAsyncPool()->submitTask($task);
-    }
-
-
-    /**
-     * Saves the aliases to the files.
-     */
-    public function save() : void {
-
-        $task = new AsyncSaveAliases($this->uuidFile, $this->fuuidAliases);
-
-        $this->server->getAsyncPool()->submitTask($task);
-    }
+		$task = new AsyncLoadAliases($this->cidFile, $this->uuidFile);
+		$this->server->getAsyncPool()->submitTask($task);
+	}
 
 
-    /**
-     * @param string $player
-     * @param array $ips
-     * @param array $uuids
-     * @param bool $update
-     *
-     * Sets all of the aliases.
-     */
-    public function setAliases(string $player, array $ips, array $uuids, bool $update = true) : void {
+	/**
+	 * Saves the aliases to the files.
+	 */
+	public function save() : void{
 
-        $this->ipAliases[$player] = $ips;
-        $this->uuidAliases[$player] = $uuids;
+		$task = new AsyncSaveAliases($this->uuidFile, $this->fuuidAliases);
 
-        $playerManager = MineceitCore::getPlayerHandler();
+		$this->server->getAsyncPool()->submitTask($task);
+	}
 
-        if($update) {
-            foreach ($ips as $ign) {
-                if (($p = $this->server->getPlayer($ign)) !== null and $p instanceof MineceitPlayer) {
-                    $pName = $p->getName();
-                    if ($pName !== $player) {
-                        $playerManager->updateAliases($p, false);
-                    }
-                }
-            }
-        }
-    }
 
-    /**
-     * @param array $uuid
-     *
-     * Loads the aliases.
-     */
-    public function loadAliases(array $uuid) : void {
-        $this->fuuidAliases = $uuid;
-    }
+	/**
+	 * @param string $player
+	 * @param array  $ips
+	 * @param array  $uuids
+	 * @param bool   $update
+	 *
+	 * Sets all of the aliases.
+	 */
+	public function setAliases(string $player, array $ips, array $uuids, bool $update = true) : void{
 
-    /**
-     * @param MineceitPlayer $player
-     * @return array
-     *
-     * Gets the ip aliases of the player.
-     */
-    public function getAliases(MineceitPlayer $player) : array {
+		$this->ipAliases[$player] = $ips;
+		$this->uuidAliases[$player] = $uuids;
 
-        $name = $player->getName();
+		$playerManager = MineceitCore::getPlayerHandler();
 
-        $data = [];
+		if($update){
+			foreach($ips as $ign){
+				if(($p = $this->server->getPlayer($ign)) !== null && $p instanceof MineceitPlayer){
+					$pName = $p->getName();
+					if($pName !== $player){
+						$playerManager->updateAliases($p, false);
+					}
+				}
+			}
+		}
+	}
 
-        if(isset($this->ipAliases[$name])) {
-            $data = $this->ipAliases[$name];
-        }
+	/**
+	 * @param array $uuid
+	 *
+	 * Loads the aliases.
+	 */
+	public function loadAliases(array $uuid) : void{
+		$this->fuuidAliases = $uuid;
+	}
 
-        if(isset($this->uuidAliases[$name])) {
-            $data = array_unique(array_merge($data, $this->uuidAliases[$name]));
-        }
+	/**
+	 * @param MineceitPlayer $player
+	 *
+	 * @return array
+	 *
+	 * Gets the ip aliases of the player.
+	 */
+	public function getAliases(MineceitPlayer $player) : array{
 
-        if(count($data) > 0) {
-            return $data;
-        }
+		$name = $player->getName();
 
-        return [$name];
-    }
+		$data = [];
 
-    /**
-     * @param MineceitPlayer $player
-     * @return array
-     *
-     * Used to collect data of a player.
-     */
-    public function collectData(MineceitPlayer $player) : array {
+		if(isset($this->ipAliases[$name])){
+			$data = $this->ipAliases[$name];
+		}
 
-        $name = $player->getName();
-        $uuid = $player->getUniqueId()->toString();
+		if(isset($this->uuidAliases[$name])){
+			$data = array_unique(array_merge($data, $this->uuidAliases[$name]));
+		}
 
-        $data = [];
+		if(count($data) > 0){
+			return $data;
+		}
 
-        if(isset($this->fuuidAliases[$uuid])) {
-            $data = $this->fuuidAliases[$uuid];
-        }
+		return [$name];
+	}
 
-        $searched = array_flip($data);
+	/**
+	 * @param MineceitPlayer $player
+	 *
+	 * @return array
+	 *
+	 * Used to collect data of a player.
+	 */
+	public function collectData(MineceitPlayer $player) : array{
 
-        if(!isset($searched[$name])) {
-            $data[] = $name;
-        }
+		$name = $player->getName();
+		$uuid = $player->getUniqueId()->toString();
 
-        $this->fuuidAliases[$uuid] = $data;
+		$data = [];
 
-        return ['uuid' => $uuid, 'alias-uuid' => $this->fuuidAliases];
-    }
+		if(isset($this->fuuidAliases[$uuid])){
+			$data = $this->fuuidAliases[$uuid];
+		}
+
+		$searched = array_flip($data);
+
+		if(!isset($searched[$name])){
+			$data[] = $name;
+		}
+
+		$this->fuuidAliases[$uuid] = $data;
+
+		return ['uuid' => $uuid, 'alias-uuid' => $this->fuuidAliases];
+	}
 }

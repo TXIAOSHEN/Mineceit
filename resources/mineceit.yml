@@ -1,17 +1,20 @@
+# The name for region
+region: "AS"
+
 # The data for mysql
 mysql:
 
   # The username of the mysql database.
-  username: "zDqni-16880"
+  username: ""
 
   # The database name.
-  database: "zDqni-16880"
+  database: ""
 
   # The database password.
-  password: "ttxNqny4kkM2xQ69FzKsmmvYt"
+  password: ""
 
   # The database ip address.
-  ip: "148.251.128.59"
+  ip: ""
 
   # The database port.
   port: 3306
@@ -19,8 +22,14 @@ mysql:
 # The webhooks corresponding to each server.
 webhooks:
 
+  # The ban webhook
+  ban: ""
+
   # The log webhook
   logs: ""
+
+  # The players webhook
+  players: ""  
 
   # The reports webhook
   reports: ""
@@ -28,6 +37,8 @@ webhooks:
   # The status webhook
   status: ""
 
+  # The smth webhook
+  smth: ""
 
 # The server name associated (used to link discord). -> defaults to Mineceit Test
-server-type: ""
+server-type: "Zeqa"

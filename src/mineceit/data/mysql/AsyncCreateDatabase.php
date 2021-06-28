@@ -1,137 +1,153 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-11-25
- * Time: 12:00
- */
 
 declare(strict_types=1);
 
 namespace mineceit\data\mysql;
 
-
-use mineceit\MineceitCore;
 use mineceit\player\ranks\Rank;
-use mineceit\player\ranks\RankHandler;
 use pocketmine\scheduler\AsyncTask;
 
-class AsyncCreateDatabase extends AsyncTask
-{
-    /** @var array */
-    private $stream;
+class AsyncCreateDatabase extends AsyncTask{
 
-    /** @var string */
-    private $username;
+	/** @var array */
+	private $stream;
 
-    /** @var string */
-    private $host;
+	/** @var string */
+	private $username;
 
-    /** @var string */
-    private $password;
+	/** @var string */
+	private $host;
 
-    /** @var int */
-    private $port;
+	/** @var string */
+	private $password;
 
-    /** @var string */
-    private $database;
+	/** @var int */
+	private $port;
 
-    public function __construct($validKits = [])
-    {
-        $mysqlStream = new MysqlStream();
+	/** @var string */
+	private $database;
 
-        $this->username = $mysqlStream->username;
-        $this->host = $mysqlStream->host;
-        $this->password = $mysqlStream->password;
-        $this->port = $mysqlStream->port;
-        $this->database = $mysqlStream->database;
+	public function __construct($validKits = []){
+		$mysqlStream = new MysqlStream();
 
-        $playerSettings = new MysqlTable("PlayerSettings");
-        $playerSettings->putId(); // 0
-        $playerSettings->putString("username"); // 1
-        // $playerInfo->putString("discordName");
-        $playerSettings->putString("language"); // 2
-        $playerSettings->putBoolean("muted", false); // 3
-        $playerSettings->putBoolean("scoreboardEnabled", true); // 4
-        $playerSettings->putBoolean("placeBreak", false); // 5
-        $playerSettings->putBoolean("peOnly", false); // 6
-        $playerSettings->putBoolean("particles", false); // 7
-        $playerSettings->putString("tag", 60); // 8
-        $playerSettings->putBoolean("translate", false); // 9
-        $playerSettings->putBoolean("swishSound", true); // 10
-        $playerSettings->putBoolean("changeTag", false); // 11
-        $playerSettings->putBoolean("lightningEnabled", true); // 12
+		$this->username = $mysqlStream->username;
+		$this->host = $mysqlStream->host;
+		$this->password = $mysqlStream->password;
+		$this->port = $mysqlStream->port;
+		$this->database = $mysqlStream->database;
 
-        $playerStats = new MysqlTable("PlayerStats");
-        $playerStats->putId(); // 13
-        $playerStats->putString("username"); // 14
-        $playerStats->putInt("kills", 0); // 15
-        $playerStats->putInt("deaths", 0); // 16
+		$playerSettings = new MysqlTable("PlayerSettings");
+		$playerSettings->putId(); // 0
+		$playerSettings->putString("username"); // 1
+		$playerSettings->putString("language"); // 2
+		$playerSettings->putBoolean("muted", false); // 3
+		$playerSettings->putBoolean("scoreboardsenabled", true); // 4
+		$playerSettings->putBoolean("placebreak", false); // 5
+		$playerSettings->putBoolean("peonly", false); // 6
+		$playerSettings->putBoolean("autorespawn", false); // 7
+		$playerSettings->putBoolean("autosprint", false); // 8
+		$playerSettings->putBoolean("morecrit", false); // 9
+		$playerSettings->putBoolean("lightning", false); // 10
+		$playerSettings->putBoolean("blood", false); // 11
+		$playerSettings->putBoolean("translate", false); // 12
+		$playerSettings->putBoolean("swishsound", true); // 13
+		$playerSettings->putBoolean("cpspopup", false); // 14
+		$playerSettings->putBoolean("autogg", false); // 15
+		$playerSettings->putBoolean("coinnoti", true); // 16
+		$playerSettings->putBoolean("expnoti", true); // 17
+		$playerSettings->putBoolean("silentstaff", false); // 18
+		$playerSettings->putString("tag", 60, ""); // 19
+		$playerSettings->putString("cape", 60, ""); // 20
+		$playerSettings->putString("stuff", 60, ""); // 21
+		$playerSettings->putString("validtags", 3000, "None"); // 22
+		$playerSettings->putString("validcapes", 3000, "None"); // 23
+		$playerSettings->putString("validstuffs", 3000, "None"); // 24
+		$playerSettings->putString("bpclaimed", 3000, "None"); // 25
+		$playerSettings->putBoolean("isbuybp", false); // 26
+		$playerSettings->putString("disguised", 60, ""); // 27
+		$playerSettings->putString("potcolor", 20, "default"); // 28
+		$playerSettings->putString("guild", 100, ""); // 29
 
-        $playerRanks = new MysqlTable("PlayerRanks");
-        $playerRanks->putId(); // 17
-        $playerRanks->putString("username"); // 18
-        $playerRanks->putString("rank1"); // 19
-        $playerRanks->putString("rank2"); // 20
-        $playerRanks->putString("rank3"); // 21
+		$playerStats = new MysqlTable("PlayerStats");
+		$playerStats->putId(); // 30
+		$playerStats->putString("username"); // 31
+		$playerStats->putInt("kills", 0); // 32
+		$playerStats->putInt("deaths", 0); // 33
+		$playerStats->putInt("coins", 0); // 34
+		$playerStats->putInt("shards", 0); // 35
+		$playerStats->putInt("exp", 0); // 36
 
-        $elo = new MysqlTable("PlayerElo");
-        $elo->putId(); // 22
-        $elo->putString("username"); // 23
-        foreach($validKits as $kit) {
-            $elo->putInt($kit, 1000);
-        }
+		$vote = new MysqlTable("VoteData");
+		$vote->putId(); // 37
+		$vote->putString("username"); // 38
+		$vote->putInt("time", 0); // 39
 
-        $ranks = new MysqlTable("RanksData");
-        $ranks->putId();
-        $ranks->putString("localname"); //0
-        $ranks->putString("name"); //1
-        $ranks->putString("format"); //2
-        $ranks->putString("permission", 60, Rank::PERMISSION_NONE); //3
-        $ranks->putBoolean("fly", false); //4
-        $ranks->putBoolean("placeBreak", false); //5
-        $ranks->putBoolean("reserveEvent", false); //6
-        $ranks->putBoolean("lightningPerm", false); //7
-        $ranks->putBoolean("changeTag", false); //8
-        $ranks->putBoolean("isdefault", false); //9
+		$donate = new MysqlTable("DonateData");
+		$donate->putId(); // 40
+		$donate->putString("username"); // 41
+		$donate->putInt("time", 0); // 42
 
-        $mysqlStream->createTable($playerSettings);
-        $mysqlStream->createTable($playerStats);
-        $mysqlStream->createTable($playerRanks);
-        $mysqlStream->createTable($elo);
-        $mysqlStream->createTable($ranks);
+		$playerRanks = new MysqlTable("PlayerRanks");
+		$playerRanks->putId(); // 43
+		$playerRanks->putString("username"); // 44
+		$playerRanks->putString("rank1", 20, ""); // 45
+		$playerRanks->putString("rank2", 20, ""); // 46
+		$playerRanks->putString("rank3", 20, ""); // 47
+		$playerRanks->putInt("lasttimehosted", -1); // 48
 
-        $this->stream = $mysqlStream->getStream();
-    }
+		$elo = new MysqlTable("PlayerElo");
+		$elo->putId(); // 49
+		$elo->putString("username"); // 50
+		foreach($validKits as $kit){
+			$elo->putInt($kit, 1000);
+		}
 
-    /**
-     * Actions to execute when run
-     *
-     * @return void
-     */
-    public function onRun()
-    {
+		$ranks = new MysqlTable("RanksData");
+		$ranks->putId();
+		$ranks->putString("localname"); //0
+		$ranks->putString("name"); //1
+		$ranks->putString("format"); //2
+		$ranks->putString("permission", 60, Rank::PERMISSION_NONE); //3
+		$ranks->putBoolean("isdefault", false); //4
 
-        $mysql = new \mysqli($this->host, $this->username, $this->password, $this->database, $this->port);
+		$mysqlStream->createTable($playerSettings);
+		$mysqlStream->createTable($playerStats);
+		$mysqlStream->createTable($vote);
+		$mysqlStream->createTable($donate);
+		$mysqlStream->createTable($playerRanks);
+		$mysqlStream->createTable($elo);
+		$mysqlStream->createTable($ranks);
 
-        if ($mysql->connect_error) {
-            var_dump("Unable to connect to db [CREATE DATABASE]");
-            // TODO
-            return;
-        }
+		$this->stream = $mysqlStream->getStream();
+	}
+
+	/**
+	 * Actions to execute when run
+	 *
+	 * @return void
+	 */
+	public function onRun(){
+
+		$mysql = new \mysqli($this->host, $this->username, $this->password, $this->database, $this->port);
+
+		if($mysql->connect_error){
+			var_dump("Unable to connect to db [CREATE DATABASE]");
+			// TODO
+			return;
+		}
 
 
-        $stream = (array)$this->stream;
+		$stream = (array) $this->stream;
 
-        foreach($stream as $query) {
+		foreach($stream as $query){
 
-            $querySuccess = $mysql->query($query);
+			$querySuccess = $mysql->query($query);
 
-            if($querySuccess === FALSE) {
-                var_dump("Failed [CREATE DATABASE]: $query\n$mysql->error");
-            }
-        }
+			if($querySuccess === false){
+				var_dump("Failed [CREATE DATABASE]: $query\n$mysql->error");
+			}
+		}
 
-        $mysql->close();
-    }
+		$mysql->close();
+	}
 }

@@ -1,23 +1,42 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-07-08
- * Time: 15:03
- */
 
 declare(strict_types=1);
 
 namespace mineceit\kits\types;
 
-use mineceit\kits\AbstractKit;
+use mineceit\kits\DefaultKit;
+use mineceit\kits\info\MiscKitInfo;
 use pocketmine\item\Item;
 
-class Fist extends AbstractKit
-{
+class Fist extends DefaultKit{
 
-    public function __construct(float $xkb = 0.4, float $ykb = 0.4, int $speed = 10)
-    {
-        parent::__construct('Fist', [Item::get(Item::STEAK, 0, 64)], [], [], $xkb, $ykb, $speed, 'textures/items/beef_cooked.png');
-    }
+	/** @var MiscKitInfo */
+	private $miscKitInfo;
+
+	public function __construct(float $xkb = 0.4, float $ykb = 0.4, int $speed = 10){
+		parent::__construct('Fist', $xkb, $ykb, $speed);
+		$this->miscKitInfo = new MiscKitInfo(
+			'textures/items/beef_cooked.png',
+			true,
+			true,
+			true,
+			true
+		);
+	}
+
+	/**
+	 * @return MiscKitInfo
+	 *
+	 * Gets the misc kit information.
+	 */
+	public function getMiscKitInfo() : MiscKitInfo{
+		return $this->miscKitInfo;
+	}
+
+	/**
+	 * Initializes the items within the abstract kit.
+	 */
+	protected function initItems() : void{
+		$this->items = [Item::get(Item::STEAK)];
+	}
 }

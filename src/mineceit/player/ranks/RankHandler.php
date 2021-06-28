@@ -1,10 +1,4 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-07-24
- * Time: 12:30
- */
 
 declare(strict_types=1);
 
@@ -15,376 +9,326 @@ use mineceit\data\mysql\MysqlStream;
 use mineceit\data\ranks\AsyncLoadRanks;
 use mineceit\data\ranks\AsyncSaveRanks;
 use mineceit\MineceitCore;
+use mineceit\parties\events\types\match\data\MineceitTeam;
+use mineceit\parties\events\types\PartyDuel;
+use mineceit\parties\events\types\PartyGames;
 use mineceit\player\MineceitPlayer;
-use mineceit\player\particles\ParticleHandler;
 use pocketmine\Server;
 use pocketmine\utils\TextFormat;
 
-class RankHandler
-{
+class RankHandler{
+
+	/* @var Rank[]|array */
+	private $ranks;
 
-    /* @var Rank[]|array */
-    private $ranks;
+	/* @var Rank|null */
+	private $defaultRank;
 
-    /* @var Rank|null */
-    private $defaultRank;
+	/** @var Server */
+	private $server;
 
-    /** @var Server */
-    private $server;
+	/** @var string */
+	private $file;
 
-    /** @var string */
-    private $file;
+	public function __construct(MineceitCore $core){
+		$this->ranks = [];
+		$this->defaultRank = null;
 
-    /** @var MineceitCore */
-    private $core;
+		$this->server = $core->getServer();
 
-    /** @var ParticleHandler */
-    private static $particlesHandler;
+		$this->file = $core->getDataFolder() . '/ranks.yml';
 
-    public function __construct(MineceitCore $core)
-    {
-        self::$particlesHandler = new ParticleHandler($core);
+		$this->initRanks();
+	}
 
-        $this->ranks = [];
-        $this->defaultRank = null;
+	/**
+	 * Initializes the ranks so that they can be loaded.
+	 */
+	private function initRanks() : void{
 
-        $this->server = $core->getServer();
-        $this->core = $core;
+		$task = new AsyncLoadRanks($this->file);
 
-        $this->file = $core->getDataFolder() . '/ranks.yml';
+		$this->server->getAsyncPool()->submitTask($task);
+	}
 
-        $this->initRanks();
-    }
 
-    /**
-     * @return ParticleHandler
-     */
-    public static function getParticlesHandler() : ParticleHandler {
-        return self::$particlesHandler;
-    }
+	/**
+	 * Loads the ranks to the server.
+	 *
+	 * @param array $data
+	 */
+	public function loadRanks(array $data) : void{
 
-    /**
-     * Initializes the ranks so that they can be loaded.
-     */
-    private function initRanks() : void {
+		$ranks = (array) $data['ranks'];
 
-        $task = new AsyncLoadRanks($this->file);
+		$defaultRank = (string) $data['default-rank'];
 
-        $this->server->getAsyncPool()->submitTask($task);
-    }
+		$keys = array_keys($ranks);
 
+		/** @var Rank[]|array $outputRanks */
+		$outputRanks = [];
 
-    /**
-     * Loads the ranks to the server.
-     *
-     * @param array $data
-     */
-    public function loadRanks(array $data) : void {
+		foreach($keys as $localName){
+			$value = (array) $ranks[$localName];
+			$rank = Rank::parseRank($localName, $value);
+			if($rank !== null){
+				$outputRanks[$localName] = $rank;
+			}
+		}
 
-        $ranks = (array)$data['ranks'];
+		$this->ranks = $outputRanks;
 
-        $defaultRank = (string)$data['default-rank'];
+		/** @var Rank|null $outputDefaultRank */
+		$this->defaultRank = isset($outputRanks[$defaultRank]) ? $outputRanks[$defaultRank] : null;
+	}
 
-        $keys = array_keys($ranks);
+	/**
+	 * @param string $name
+	 *
+	 * @return Rank|null
+	 */
+	public function getRank(string $name) : ?Rank{
+		$result = null;
+		if(isset($this->ranks[$name]))
+			$result = $this->ranks[$name];
+		else{
+			foreach($this->ranks as $rank){
+				$rankName = $rank->getName();
+				if($rankName === $name){
+					$result = $rank;
+					break;
+				}
+			}
+		}
+		return $result;
+	}
 
-        /** @var Rank[]|array $outputRanks */
-        $outputRanks = [];
+	/**
+	 * @param string $name
+	 * @param null   $format
+	 * @param string $permission
+	 *
+	 * @return bool
+	 */
+	public function createRank(string $name, $format = null, string $permission = Rank::PERMISSION_NONE) : bool{
 
-        foreach($keys as $localName) {
-            $value = (array)$ranks[$localName];
-            $rank = Rank::parseRank($localName, $value);
-            if($rank !== null) {
-                $outputRanks[$localName] = $rank;
-            }
-        }
+		$created = false;
 
-        $this->ranks = $outputRanks;
+		if(strlen($name) === 0){
+			return false;
+		}
 
-        /** @var Rank|null $outputDefaultRank */
-        $this->defaultRank = isset($outputRanks[$defaultRank]) ? $outputRanks[$defaultRank] : null;
-    }
+		$localName = strtolower($name);
 
+		$format = $format ?? TextFormat::DARK_GRAY . "[" . TextFormat::WHITE . $name . TextFormat::DARK_GRAY . ']';
 
-    /**
-     * Saves the ranks to the database.
-     */
-    private function saveRanks() : void {
+		$rank = new Rank($localName, $name, $format, $permission);
 
-        $ranks = [];
+		if(!isset($this->ranks[$localName])){
 
-        $stream = new MysqlStream();
+			$this->ranks[$localName] = $rank;
 
-        // TODO PARTICLES
+			if($this->defaultRank === null){
+				$this->defaultRank = $rank;
+			}
 
-        $stream->removeRows("RanksData");
+			$created = true;
 
-        $defaultRank = $this->defaultRank !== null ? $this->defaultRank->getLocalName() : '';
+			$this->saveRanks();
+		}
 
-        $id = 1;
-
-        foreach($this->ranks as $rank) {
-
-            $data = $rank->encode();
-            $localName = $rank->getLocalName();
-
-            $ranks[$rank->getLocalName()] = $data;
+		return $created;
+	}
 
-            $row = new MysqlRow("Ranks");
-            $row->put("id", $id);
-            $row->put("localname", $localName);
-            $row->put("name", $data['name']);
-            $row->put("format", $data['format']);
-            $row->put("permission", $data['permission']);
-            $row->put("fly", $data['fly']);
-            $row->put("placeBreak", $data['place-break']);
-            $row->put("reserveEvent", $data['reserve-event']);
-            $row->put("lightningKill", $data['lightning-kill']);
-            $row->put("changeTag", $data['tag']);
-            $row->put("isdefault", $defaultRank === $localName);
-
-            $stream->insertNUpdate($row);
+	/**
+	 * Saves the ranks to the database.
+	 */
+	private function saveRanks() : void{
 
-            /* $stream->insertNUpdate($row);
-
-            $row = new MysqlRow("RankParticles");
+		$ranks = [];
 
-            $row->put("id", $id);
-            $row->put("localname", $localName);
+		$stream = new MysqlStream();
 
-            foreach($particles as $particle) {
-                $local = $particle->getLocalName();
-                $row->put($local, in_array($local, $rankParticles));
-            }
+		$defaultRank = $this->defaultRank !== null ? $this->defaultRank->getLocalName() : '';
 
-            $stream->insertNUpdate($row); */
+		$id = 1;
 
-            $id++;
-        }
+		foreach($this->ranks as $rank){
 
-        $task = new AsyncSaveRanks(['default-rank' => $defaultRank, 'ranks' => $ranks], $this->file, $stream);
+			$data = $rank->encode();
+			$localName = $rank->getLocalName();
 
-        $this->server->getAsyncPool()->submitTask($task);
-    }
+			$ranks[$rank->getLocalName()] = $data;
 
-    /**
-     * @param string $name
-     * @return Rank|null
-     */
-    public function getRank(string $name) {
-        $result = null;
-        if(isset($this->ranks[$name]))
-            $result = $this->ranks[$name];
-        else {
-            foreach($this->ranks as $rank) {
-                $rankName = $rank->getName();
-                if($rankName === $name) {
-                    $result = $rank;
-                    break;
-                }
-            }
-        }
-        return $result;
-    }
+			$row = new MysqlRow("RanksData");
+			$row->put("id", $id);
+			$row->put("localname", $localName);
+			$row->put("name", $data['name']);
+			$row->put("format", $data['format']);
+			$row->put("permission", $data['permission']);
+			$row->put("isdefault", $defaultRank === $localName);
 
-    /**
-     * @return Rank|null
-     */
-    public function getDefaultRank() {
-        return $this->defaultRank;
-    }
+			$stream->insertNUpdate($row);
+
+			$id++;
+		}
 
-    /**
-     * @param string $name
-     * @param $format
-     * @param bool $fly
-     * @param bool $edit
-     * @param string $permission
-     * @return bool
-     */
-    public function createRank(string $name, $format = null, bool $fly = false, bool $edit = false, string $permission = Rank::PERMISSION_NONE) : bool {
-
-        $created = false;
-
-        if(strlen($name) === 0) {
-            return false;
-        }
-
-        $localName = strtolower($name);
-
-        $format = $format ?? TextFormat::DARK_GRAY . "[" . TextFormat::WHITE . $name . TextFormat::DARK_GRAY . ']';
-
-        $rank = new Rank($localName, $name, $format, $permission, $fly, $edit);
-
-        if(!isset($this->ranks[$localName])) {
-
-            $this->ranks[$localName] = $rank;
-
-            if($this->defaultRank === null) {
-                $this->defaultRank = $rank;
-            }
-
-            $created = true;
-
-            $this->saveRanks();
-        }
-
-        return $created;
-    }
-
-    /**
-     * @param string $name
-     * @return bool
-     */
-    public function removeRank(string $name) : bool {
-
-        $removed = false;
-        $localName = strtolower($name);
-
-        if(isset($this->ranks[$localName])) {
-
-            if($this->defaultRank !== null and $this->defaultRank->getLocalName() === $localName) {
-                $this->defaultRank = null;
-            }
-
-            unset($this->ranks[$localName]);
-
-            $removed = true;
-
-            $players = $this->server->getOnlinePlayers();
-
-            foreach($players as $player) {
-                if($player instanceof MineceitPlayer)
-                    $player->removeRank($localName);
-            }
-
-            $this->saveRanks();
-        }
-        return $removed;
-    }
-
-    /**
-     * @param MineceitPlayer|string $player
-     * @return string
-     */
-    public function formatRanksForChat(MineceitPlayer $player) : string {
-
-        $name = $player->getName();
-
-        $ranks = $player->getRanks();
-
-        $tag = $player->getCustomTag();
-
-        $size = count($ranks);
-
-        $format = TextFormat::WHITE . "$name" . TextFormat::GRAY . ":" . TextFormat::RESET;
-
-        if($size > 0) {
-
-            $rankFormat = '';
-
-            foreach($ranks as $rank) {
-                $formatRank = $rank->getFormat();
-                $rankFormat .= $formatRank;
-            }
-
-            $format = $rankFormat . TextFormat::WHITE . " $name"  . TextFormat::GRAY . ":" . TextFormat::RESET;
-
-        } else {
-
-            $defaultRank = $this->getDefaultRank();
-
-            if($defaultRank !== null)
-                $format = $defaultRank->getFormat() . TextFormat::WHITE . " $name" . TextFormat::GRAY . ":" . TextFormat::RESET;
-        }
-
-        $perm = $player->getPermission(MineceitPlayer::PERMISSION_TAG);
-
-        return ($perm and strlen($tag) > 0) ? $tag . ' ' . TextFormat::RESET . $format : $format;
-    }
-
-    /**
-     * @param MineceitPlayer $player
-     * @return string
-     */
-    public function formatRanksForTag(MineceitPlayer $player) : string {
-
-        $ranks = $player->getRanks();
-
-        $name = $player->getDisplayName();
-
-        $size = count($ranks);
-
-        $format = TextFormat::GREEN . $name;
-
-        $tag = $player->getCustomTag();
-
-        $perm = $player->getPermission(MineceitPlayer::PERMISSION_TAG);
-
-        if($size > 0) {
-
-            $rankFormat = '';
-
-            foreach($ranks as $rank) {
-                if ($rank !== null) {
-                    $formatRank = $rank->getFormat();
-                    $rankFormat .= $formatRank;
-                }
-            }
-
-            $format = $rankFormat . TextFormat::GREEN . $name;
-
-        } else {
-
-            $defaultRank = $this->getDefaultRank();
-
-            if($defaultRank !== null)
-                $format = $defaultRank->getFormat() . TextFormat::GREEN . $name;
-        }
-
-        return ($perm) ? $tag . ' ' . TextFormat::RESET . $format : $format;
-    }
-
-    /**
-     * @param bool $asArray
-     * @return string|array|string[]
-     */
-    public function listRanks(bool $asArray = true) {
-
-        if($asArray) {
-            $ranks = [];
-            foreach($this->ranks as $rank)
-                $ranks[] = $rank->getName();
-            return $ranks;
-        }
-
-        $size = count($this->ranks);
-
-        if($size <= 0)
-            return 'None';
-
-        $result = '';
-
-        $commaLen = $size - 1;
-        $count = 0;
-
-        foreach($this->ranks as $rank) {
-            $comma = ($count === $commaLen) ? '' : ', ';
-            $result .= $rank->getName() . $comma;
-            $count++;
-        }
-
-        return $result;
-    }
-
-    /**
-     * Gets the valid ranks. Used in async tasks to update a deleted rank.
-     *
-     * @return array|string[]
-     */
-    public function getValidRanks() : array {
-        $result = [];
-        foreach($this->ranks as $rank)
-            $result[] = $rank->getLocalName();
-        return $result;
-    }
+		$task = new AsyncSaveRanks(['default-rank' => $defaultRank, 'ranks' => $ranks], $this->file, $stream);
+
+		$this->server->getAsyncPool()->submitTask($task);
+	}
+
+	/**
+	 * @param string $name
+	 *
+	 * @return bool
+	 */
+	public function removeRank(string $name) : bool{
+
+		$removed = false;
+		$localName = strtolower($name);
+
+		if(isset($this->ranks[$localName])){
+
+			if($this->defaultRank !== null && $this->defaultRank->getLocalName() === $localName){
+				$this->defaultRank = null;
+			}
+
+			unset($this->ranks[$localName]);
+
+			$removed = true;
+
+			$players = $this->server->getOnlinePlayers();
+
+			foreach($players as $player){
+				if($player instanceof MineceitPlayer)
+					$player->removeRank($localName);
+			}
+
+			$this->saveRanks();
+		}
+		return $removed;
+	}
+
+	/**
+	 * @param MineceitPlayer|string $player
+	 *
+	 * @return string
+	 */
+	public function formatRanksForChat(MineceitPlayer $player) : string{
+		$disguisedInfo = $player->getDisguiseInfo();
+		if($disguisedInfo->isDisguised()){
+			return $this->getDefaultRank()->getFormat() . TextFormat::WHITE . ' ' .
+				$disguisedInfo->getDisguiseData()->getDisplayName() . TextFormat::GRAY . ': ' . TextFormat::RESET;
+		}
+
+		if(count($ranks = $player->getRanks()) > 0){
+			return $ranks[0]->getFormat() . TextFormat::WHITE . ' ' .
+				$player->getDisplayName() . TextFormat::GRAY . ":" . TextFormat::RESET;
+		}
+
+		$format = TextFormat::WHITE . $player->getDisplayName() . TextFormat::GRAY . ":" . TextFormat::RESET;
+		$defaultRank = $this->getDefaultRank();
+		if($defaultRank !== null){
+			$format = $defaultRank->getFormat() . ' ' . $format;
+		}
+		return $format;
+	}
+
+	/**
+	 * @return Rank|null
+	 */
+	public function getDefaultRank() : ?Rank{
+		return $this->defaultRank;
+	}
+
+	/**
+	 * @param MineceitPlayer|string $player
+	 *
+	 * @return string
+	 */
+	public function formatStaffForChat(MineceitPlayer $player) : string{
+		return TextFormat::RED . TextFormat::BOLD . "STAFF" . TextFormat::RESET .
+			TextFormat::RED . ' ' . $player->getName() . ' ' . TextFormat::WHITE . ":" . TextFormat::RESET;
+	}
+
+	/**
+	 * @param MineceitPlayer $player
+	 *
+	 * @return string
+	 */
+	public function formatRanksForTag(MineceitPlayer $player) : string{
+		if(($disguiseInfo = $player->getDisguiseInfo())->isDisguised()){
+			return $this->getDefaultRank()->getColor() . ' '
+				. $disguiseInfo->getDisguiseData()->getDisplayName();
+		}
+
+		$name = $player->getDisplayName();
+		if($player->getDisguiseInfo()->isDisguised()
+			|| (count($ranks = $player->getRanks()) <= 0)){
+			$color = $this->getDefaultRank()->getColor();
+		}else{
+			$color = $ranks[0]->getColor();
+		}
+
+		if($player->isInParty()){
+			$partyEvent = $player->getPartyEvent();
+			if($partyEvent instanceof PartyDuel || $partyEvent instanceof PartyGames){
+				$team = $partyEvent->getTeam($player);
+				if($team instanceof MineceitTeam){
+					$color = $team->getTeamColor();
+				}
+			}
+		}
+		$format = $color . ' ' . $name;
+		if($player->getTag() !== ''){
+			$format = $player->getTag() . "\n" . TextFormat::RESET . $format;
+		}
+		return $format;
+	}
+
+	/**
+	 * @param bool $asArray
+	 *
+	 * @return string|array|string[]
+	 */
+	public function listRanks(bool $asArray = true){
+
+		if($asArray){
+			$ranks = [];
+			foreach($this->ranks as $rank)
+				$ranks[] = $rank->getName();
+			return $ranks;
+		}
+
+		$size = count($this->ranks);
+
+		if($size <= 0)
+			return 'None';
+
+		$result = '';
+
+		$commaLen = $size - 1;
+		$count = 0;
+
+		foreach($this->ranks as $rank){
+			$comma = ($count === $commaLen) ? '' : ', ';
+			$result .= $rank->getName() . $comma;
+			$count++;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Gets the valid ranks. Used in async tasks to update a deleted rank.
+	 *
+	 * @return array|string[]
+	 */
+	public function getValidRanks() : array{
+		$result = [];
+		foreach($this->ranks as $rank)
+			$result[] = $rank->getLocalName();
+		return $result;
+	}
 }

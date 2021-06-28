@@ -1,156 +1,188 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-11-19
- * Time: 19:36
- */
 
 declare(strict_types=1);
 
 namespace mineceit\data\players;
 
-
-use mineceit\data\mysql\MysqlRow;
-use mineceit\data\mysql\MysqlStream;
 use mineceit\MineceitCore;
 use mineceit\MineceitUtil;
-use mineceit\player\language\Language;
 use mineceit\player\MineceitPlayer;
 use pocketmine\scheduler\AsyncTask;
+use pocketmine\utils\TextFormat;
 
-class AsyncSavePlayerData extends AsyncTask
-{
+class AsyncSavePlayerData extends AsyncTask{
 
-    /** @var string */
-    private $name;
+	/** @var string */
+	private $path;
 
-    /** @var string */
-    private $path;
+	/** @var array */
+	private $yamlInfo;
 
-    /** @var bool */
-    private $isMysql = MineceitCore::MYSQL_ENABLED;
+	/** @var string */
+	private $username;
 
-    /** @var array */
-    private $yamlInfo;
+	/** @var string -> The ip of the db */
+	private $host;
 
-    /** @var string */
-    private $username;
+	/** @var string */
+	private $password;
 
-    /** @var string -> The ip of the db */
-    private $host;
+	/** @var int */
+	private $port;
 
-    /** @var string */
-    private $password;
+	/** @var string */
+	private $database;
 
-    /** @var int */
-    private $port;
+	/** @var array */
+	private $mysqlStream;
 
-    /** @var string */
-    private $database;
+	/**
+	 * AsyncSavePlayerData constructor.
+	 *
+	 * @param MineceitPlayer $player
+	 * @param string         $path
+	 */
+	public function __construct(MineceitPlayer $player, string $path){
+		$this->path = $path;
 
-    /** @var array */
-    private $mysqlStream;
+		if(!MineceitCore::MYSQL_ENABLED){
+			# tag sort
+			$tags = [];
+			$validtags = $player->getValidTags();
+			foreach($validtags as $tag){
+				if($tag === 'None'){
+					if(($key = array_search('None', $validtags)) !== false)
+						unset($validtags[$key]);
+				}else{
+					$tags[] = TextFormat::clean($tag);
+				}
+			}
+			array_multisort($tags, $validtags);
+			array_unshift($validtags, 'None');
 
-    /**
-     * AsyncSavePlayerData constructor.
-     * @param MineceitPlayer $player
-     * @param string $path
-     */
-    public function __construct(MineceitPlayer $player, string $path)
-    {
-        $this->name = $player->getName();
-        $this->path = $path;
+			# cape sort
+			$capes = [];
+			$validcapes = $player->getValidCapes();
+			foreach($validcapes as $cape){
+				if($cape === 'None'){
+					if(($key = array_search('None', $validcapes)) !== false)
+						unset($validcapes[$key]);
+				}else{
+					$capes[] = TextFormat::clean($cape);
+				}
+			}
+			array_multisort($capes, $validcapes);
+			array_unshift($validcapes, 'None');
 
-        $this->yamlInfo = [
-            'kills' => $player->getKills(), // Stats
-            'deaths' => $player->getDeaths(), // Stats
-            'scoreboards-enabled' => $player->isScoreboardEnabled(), // Settings
-            'pe-only' => $player->isPeOnly(), // Settings
-            'place-break' => $player->isBuilderModeEnabled(), // Settings
-            // 'permissions' => $player->getPermissions(),
-            'muted' => $player->isMuted(), // Settings
-            'language' => $player->getLanguage()->getLocale(), // Settings
-            'particles' => $player->isParticlesEnabled(), // Settings
-            'tag' => $player->getCustomTag(), // Settings
-            'elo' => $player->getElo(), // Elo
-            'ranks' => $player->getRanks(true), // Ranks
-            'translate' => $player->doesTranslateMessages(), // Settings
-            'swish-sound' => $player->isSwishEnabled(),
-            'lastTimePlayed' => time(),
-            'change-tag' => $player->canChangeTag(),
-            'limited-features' => $player->getLimitedFeaturesTime(),
-            'lightning-enabled' => $player->lightningEnabled()
-        ];
+			# stuff sort
+			$stuffs = [];
+			$validstuffs = $player->getValidStuffs();
+			foreach($validstuffs as $stuff){
+				if($stuff === 'None'){
+					if(($key = array_search('None', $validstuffs)) !== false)
+						unset($validstuffs[$key]);
+				}else{
+					$stuffs[] = TextFormat::clean($stuff);
+				}
+			}
+			array_multisort($stuffs, $validstuffs);
+			array_unshift($validstuffs, 'None');
 
-        $stream = MineceitUtil::getMysqlStream($player, true);
+			$bpclaimed = $player->getBpClaimed();
 
-        $this->host = $stream->host;
+			$this->yamlInfo = [
+				'coinnoti' => true,
+				'expnoti' => true,
+				'silent-staff' => $player->isSilentStaffEnabled(),
+				'tag' => $player->getTag(),
+				'muted' => $player->isMuted(),
+				'language' => $player->getLanguageInfo()->getLanguage()->getLocale(),
+				'ranks' => $player->getRanks(true),
+				'cape' => $player->getCape(),
+				'stuff' => $player->getStuff(),
+				'potcolor' => $player->getPotColor(),
+				'validtags' => implode(',', $validtags),
+				'validcapes' => implode(',', $validcapes),
+				'validstuffs' => implode(',', $validstuffs),
+				'bpclaimed' => implode(',', $bpclaimed),
+				'isbuybp' => $player->isBuyBattlePass(),
+				// TODO: Implementation
+				'guild' => $player->getGuildRegion() . ',' . $player->getGuild(),
+				'lasttimehosted' => $player->getLastTimeHosted()
+			];
 
-        $this->username = $stream->username;
+			$player->getDisguiseInfo()->export($this->yamlInfo);
+			$player->getStatsInfo()->export($this->yamlInfo);
+			$player->getSettingsInfo()->export($this->yamlInfo);
+			$player->getEloInfo()->export($this->yamlInfo);
+		}
 
-        $this->password = $stream->password;
+		$stream = MineceitUtil::getMysqlStream($player, true);
 
-        $this->database = $stream->database;
+		$this->host = $stream->host;
 
-        $this->port = $stream->port;
+		$this->username = $stream->username;
 
-        $this->mysqlStream = $stream->getStream();
-    }
+		$this->password = $stream->password;
 
-    /**
-     * Actions to execute when run
-     *
-     * @return void
-     */
-    public function onRun()
-    {
+		$this->database = $stream->database;
 
-        $info = (array)$this->yamlInfo;
+		$this->port = $stream->port;
 
-        $keys = array_keys($info);
+		$this->mysqlStream = $stream->getStream();
+	}
 
-        if (!$this->isMysql) {
+	/**
+	 * Actions to execute when run
+	 *
+	 * @return void
+	 */
+	public function onRun(){
 
-            $parsed = yaml_parse_file($this->path, 0);
+		if(!MineceitCore::MYSQL_ENABLED){
 
-            foreach($keys as $key) {
+			$info = (array) $this->yamlInfo;
 
-                $dataInfo = $info[$key];
-                switch($key) {
-                    case 'ranks':
-                    // case 'permissions':
-                    case 'elo':
-                        $dataInfo = (array)$info[$key];
-                        break;
-                }
-                $parsed[$key] = $dataInfo;
-            }
+			$keys = array_keys($info);
 
-            yaml_emit_file($this->path, $parsed);
+			$parsed = yaml_parse_file($this->path);
 
-        } else {
+			foreach($keys as $key){
 
-            $stream = (array)$this->mysqlStream;
+				$dataInfo = $info[$key];
+				switch($key){
+					case 'ranks':
+						// case 'permissions':
+					case 'elo':
+						$dataInfo = (array) $info[$key];
+						break;
+				}
+				$parsed[$key] = $dataInfo;
+			}
 
-            $mysql = new \mysqli($this->host, $this->username, $this->password, $this->database, $this->port);
+			yaml_emit_file($this->path, $parsed);
+		}else{
 
-            if ($mysql->connect_error) {
-                var_dump("Unable to connect");
-                // TODO
-                return;
-            }
+			$stream = (array) $this->mysqlStream;
 
-            foreach($stream as $query) {
+			$mysql = new \mysqli($this->host, $this->username, $this->password, $this->database, $this->port);
 
-                $querySuccess = $mysql->query($query);
+			if($mysql->connect_error){
+				var_dump("Unable to connect");
+				// TODO
+				return;
+			}
 
-                if($querySuccess === FALSE) {
-                    var_dump("FAILED [SAVE PLAYER]: $query\n{$mysql->error}");
-                }
-            }
+			foreach($stream as $query){
 
-            $mysql->close();
-        }
-    }
+				$querySuccess = $mysql->query($query);
+
+				if($querySuccess === false){
+					var_dump("FAILED [SAVE PLAYER]: $query\n{$mysql->error}");
+				}
+			}
+
+			$mysql->close();
+		}
+	}
 }

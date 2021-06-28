@@ -1,17 +1,12 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-07-09
- * Time: 14:21
- */
 
 declare(strict_types=1);
 
 namespace mineceit\game\entities;
 
-use mineceit\player\MineceitPlayer;
+use mineceit\game\behavior\IFishingBehaviorEntity;
 use pocketmine\entity\Entity;
+use pocketmine\entity\Human;
 use pocketmine\entity\projectile\Projectile;
 use pocketmine\event\entity\EntityCombustByEntityEvent;
 use pocketmine\event\entity\EntityDamageByChildEntityEvent;
@@ -20,152 +15,133 @@ use pocketmine\event\entity\EntityDamageEvent;
 use pocketmine\item\Item;
 use pocketmine\math\RayTraceResult;
 use pocketmine\network\mcpe\protocol\ActorEventPacket;
-use pocketmine\Player;
 
-class FishingHook extends Projectile
-{
+class FishingHook extends Projectile{
 
-    public const NETWORK_ID = self::FISHING_HOOK;
+	public const NETWORK_ID = self::FISHING_HOOK;
 
-    public $caught = false;
-    public $width = 0.2;
-    public $height = 0.2;
-    public $gravity = 0.08;
-    public $drag = 0.05;
+	public $caught = false;
+	public $height = 0.15;
+	public $width = 0.15;
+	public $gravity = 0.075;
+	public $drag = 0.05;
 
-    /* @var Entity|null */
-    private $attachedEntity = null;
+	private $attachedEntity = null;
 
-    public function onUpdate(int $currentTick): bool
-    {
-        if ($this->isFlaggedForDespawn() or !$this->isAlive()) {
-            return false;
-        }
+	public function onUpdate(int $currentTick) : bool{
+		if($this->isFlaggedForDespawn() || !$this->isAlive()){
+			return false;
+		}
 
-        $this->timings->startTiming();
+		$this->timings->startTiming();
+		$update = parent::onUpdate($currentTick);
 
-        $update = parent::onUpdate($currentTick);
+		if(!$this->isCollidedVertically){
+			$this->motion->x *= 1.13;
+			$this->motion->z *= 1.13;
+			$this->motion->y -= $this->gravity * -0.04;
 
-        if (!$this->isCollidedVertically) {
-            $this->motion->x *= 1.13;
-            $this->motion->z *= 1.13;
-            $this->motion->y -= $this->gravity * -0.04;
-            if($this->isUnderwater()) {
+			if($this->isUnderwater()){
+				$this->motion->z = 0;
+				$this->motion->x = 0;
+				$difference = floatval($this->getWaterHeight() - $this->y);
 
-                $this->motion->z = 0;
-                $this->motion->x = 0;
-                $difference = floatval($this->getWaterHeight() - $this->y);
+				if($difference > 0.15){
+					$this->motion->y += 0.1;
+				}else{
+					$this->motion->y += 0.01;
+				}
+			}
 
-                if($difference > 0.15) $this->motion->y += 0.1;
-                else $this->motion->y += 0.01;
-            }
-            $update = true;
-        } elseif ($this->isCollided and $this->keepMovement) {
-            $this->motion->x = 0;
-            $this->motion->y = 0;
-            $this->motion->z = 0;
-            $this->keepMovement = false;
-            $update = true;
-        }
+			$update = true;
+		}elseif($this->isCollided && $this->keepMovement){
 
-        if($this->isOnGround()) $this->motion->y = 0;
+			$this->motion->x = 0;
+			$this->motion->y = 0;
+			$this->motion->z = 0;
+			$this->keepMovement = false;
+			$update = true;
+		}
 
-        if($this->attachedEntity !== null) {
+		if($this->isOnGround()){
+			$this->motion->y = 0;
+		}
 
-            $pos = $this->attachedEntity->asPosition();
+		if(($source = $this->getOwningEntity()) != null && $source instanceof Human){
+			$itemInHand = $source->getInventory()->getItemInHand();
+			if(
+				$source->distance($this) > 35
+				|| $itemInHand->getId() !== Item::FISHING_ROD
+				|| $this->attachedEntity !== null
+			){
 
-            if($pos !== $this->getPosition()) {
-                $this->setPosition($pos->add(0, 1));
-            }
+				$this->kill();
+				$this->close();
 
-            $this->setMotion($this->attachedEntity->getMotion());
-        }
+				if($source instanceof IFishingBehaviorEntity){
+					$behavior = $source->getFishingBehavior();
+					if($behavior->isFishing()){
+						$behavior->stopFishing(true);
+					}
+				}
+			}
+		}
 
-        $source = $this->getOwningEntity();
+		$this->timings->stopTiming();
+		return $update;
+	}
 
-        if(!is_null($source) and $source instanceof Player) {
+	public function getWaterHeight() : int{
+		$floorY = $this->getFloorY();
+		for($y = $floorY; $y < 256; $y++){
+			$id = $this->getLevel()->getBlockIdAt($this->getFloorX(), $y, $this->getFloorZ());
+			if($id === 0){
+				return $y;
+			}
+		}
 
-            $p = $source->getPlayer();
-            $inv = $p->getInventory();
-            $itemInHand = $inv->getItemInHand();
+		return $floorY;
+	}
 
-            $kill = false;
+	public function reelLine() : void{
+		$e = $this->getOwningEntity();
 
-            if($source->distance($this) > 35)
-                $kill = true;
-            elseif ($itemInHand->getId() !== Item::FISHING_ROD)
-                $kill = true;
+		if($e instanceof Human && $this->caught){
+			$this->broadcastEntityEvent(ActorEventPacket::FISH_HOOK_TEASE, 0, $this->getLevel()->getPlayers());
+		}
 
-            if($kill === true) {
+		if(!$this->closed){
+			$this->kill();
+			$this->close();
+		}
+	}
 
-                $this->kill();
-                $this->close();
+	public function onHitEntity(Entity $entityHit, RayTraceResult $hitResult) : void{
+		$damage = $this->getResultDamage();
 
-                if($p instanceof MineceitPlayer and $p->isFishing())
-                    $p->stopFishing();
-            }
-        }
+		$this->attachedEntity = $entityHit;
 
-        $this->timings->stopTiming();
+		if($damage >= 0){
 
-        return $update;
-    }
+			if($this->getOwningEntity() === null){
+				$ev = new EntityDamageByEntityEvent($this, $entityHit, EntityDamageEvent::CAUSE_PROJECTILE, $damage);
+			}else{
+				$ev = new EntityDamageByChildEntityEvent($this->getOwningEntity(), $this, $entityHit, EntityDamageEvent::CAUSE_PROJECTILE, $damage);
+			}
 
-    public function getWaterHeight() : int {
-        $floorY = $this->getFloorY();
-        $result = $floorY;
-        for($y = $floorY; $y < 256; $y++) {
-            $id = $this->getLevel()->getBlockIdAt($this->getFloorX(), $y, $this->getFloorZ());
-            if($id === 0) {
-                $result = $y;
-                break;
-            }
-        }
-        return $result;
-    }
+			$entityHit->attack($ev);
 
-    public function reelLine() : void {
+			if($this->isOnFire()){
+				$ev = new EntityCombustByEntityEvent($this, $entityHit, 5);
+				$ev->call();
+				if(!$ev->isCancelled()){
+					$entityHit->setOnFire($ev->getDuration());
+				}
+			}
+		}
+	}
 
-        $e = $this->getOwningEntity();
-
-        if($e instanceof Player and $this->caught === true)
-            $this->broadcastEntityEvent(ActorEventPacket::FISH_HOOK_TEASE, 0, $this->getLevel()->getPlayers());
-
-        if(!$this->closed) {
-            $this->kill();
-            $this->close();
-        }
-    }
-
-    public function onHitEntity(Entity $entityHit, RayTraceResult $hitResult): void
-    {
-        $damage = $this->getResultDamage();
-
-        $this->attachedEntity = $entityHit;
-
-        if($damage >= 0){
-
-            if($this->getOwningEntity() === null){
-                $ev = new EntityDamageByEntityEvent($this, $entityHit, EntityDamageEvent::CAUSE_PROJECTILE, $damage);
-            }else{
-                $ev = new EntityDamageByChildEntityEvent($this->getOwningEntity(), $this, $entityHit, EntityDamageEvent::CAUSE_PROJECTILE, $damage);
-            }
-
-            $entityHit->attack($ev);
-
-            if($this->isOnFire()){
-                $ev = new EntityCombustByEntityEvent($this, $entityHit, 5);
-                $ev->call();
-                if(!$ev->isCancelled()){
-                    $entityHit->setOnFire($ev->getDuration());
-                }
-            }
-        }
-    }
-
-    public function getResultDamage(): int
-    {
-        return parent::getResultDamage();
-    }
-
+	public function getResultDamage() : int{
+		return parent::getResultDamage();
+	}
 }

@@ -1,10 +1,4 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-07-31
- * Time: 19:28
- */
 
 declare(strict_types=1);
 
@@ -18,80 +12,87 @@ use pocketmine\command\Command;
 use pocketmine\command\CommandSender;
 use pocketmine\utils\TextFormat;
 
-abstract class MineceitCommand extends Command
-{
+abstract class MineceitCommand extends Command{
 
-    /* @var bool */
-    private $canUseInDuelAndCombat;
+	/* @var bool */
+	private $canUseInDuelAndCombat;
 
-    /* @var bool */
-    private $canUseAsASpec;
+	/* @var bool */
+	private $canUseAsASpec;
 
-    public function __construct(string $name, string $description = "", string $usageMessage = null, $aliases = [], $canUseAsASpec = false, $canUseInDuelAndCombat = false)
-    {
-        parent::__construct($name, $description, $usageMessage, $aliases);
-        $this->canUseInDuelAndCombat = $canUseInDuelAndCombat;
-        $this->canUseAsASpec = $canUseAsASpec;
-    }
+	public function __construct(string $name, string $description = "", string $usageMessage = null, $aliases = [], $canUseAsASpec = false, $canUseInDuelAndCombat = false){
+		parent::__construct($name, $description, $usageMessage, $aliases);
+		$this->canUseInDuelAndCombat = $canUseInDuelAndCombat;
+		$this->canUseAsASpec = $canUseAsASpec;
+	}
 
-    /**
-     * @param CommandSender $player
-     * @return bool
-     */
-    public function canUseCommand(CommandSender $player) : bool {
+	/**
+	 * @param CommandSender $player
+	 *
+	 * @return bool
+	 */
+	public function canUseCommand(CommandSender $player) : bool{
 
-        $result = true;
+		$result = true;
 
-        $msg = null;
+		$msg = null;
 
-        $playerHandler = MineceitCore::getPlayerHandler();
+		$playerHandler = MineceitCore::getPlayerHandler();
 
-        $language = $player instanceof MineceitPlayer ? $player->getLanguage() : $playerHandler->getLanguage();
+		$language = $player instanceof MineceitPlayer ? $player->getLanguageInfo()
+			->getLanguage() : $playerHandler->getLanguage();
 
-        if($player instanceof MineceitPlayer) {
+		if($player instanceof MineceitPlayer){
 
-            if($player->isInCombat() or $player->isInDuel() or $player->isInEventDuel()) {
-                $result = $this->canUseInDuelAndCombat;
-                if(!$result) {
-                    if($player->isInDuel() or $player->isInEventDuel())
-                        $msg = $language->generalMessage(Language::COMMAND_FAIL_IN_DUEL);
-                    elseif ($player->isInCombat())
-                        $msg = $language->generalMessage(Language::COMMAND_FAIL_IN_COMBAT);
-                }
-            } elseif ($player->isADuelSpec()) {
-                $result = $this->canUseAsASpec;
-                if(!$result) {
-                    // $msg = $language->generalMessage(Language::COMMAND_FAIL_IN_DUELSPEC);
-                    $msg = TextFormat::RED . "Can't use this command while spectating a duel!";
-                    // TODO
-                }
-            }
+			if($player->isInCombat() || $player->isInDuel() || $player->isInBot() || $player->isInEventDuel() || $player->isInEventBoss()){
+				$result = $this->canUseInDuelAndCombat;
+				if(!$result){
+					if($player->isInDuel() || $player->isInEventDuel() || $player->isInEventBoss() || $player->isInBot())
+						$msg = $language->generalMessage(Language::COMMAND_FAIL_IN_DUEL);
+					elseif($player->isInCombat())
+						$msg = $language->generalMessage(Language::COMMAND_FAIL_IN_COMBAT);
+				}
+			}elseif($player->isADuelSpec()){
+				$result = $this->canUseAsASpec;
+				if(!$result){
+					$msg = TextFormat::RED . "Can't use this command while spectating a duel!";
+				}
+			}elseif($player->isFrozen()){
+				$result = false;
+				$msg = TextFormat::RED . "Can't use this command while got frozen!";
+			}elseif($player->getKitHolder()->isEditingKit()){
+				$result = false;
+				$msg = TextFormat::RED . "Can't use this command while editing kits!";
+			}elseif($player->getPartyEvent() !== null){
+				$result = false;
+				$msg = $language->generalMessage(Language::COMMAND_FAIL_IN_DUEL);
+			}
+		}
 
-        }
+		if($msg !== null) $player->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $msg);
 
-        if($msg !== null) $player->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $msg);
+		return $result;
+	}
 
-        return $result;
-    }
+	/**
+	 * @param CommandSender $sender
+	 *
+	 * @return bool
+	 */
+	public function testPermission(CommandSender $sender) : bool{
 
-    /**
-     * @param CommandSender $sender
-     *
-     * @return bool
-     */
-    public function testPermission(CommandSender $sender) : bool {
+		if($this->testPermissionSilent($sender))
+			return true;
 
-        if($this->testPermissionSilent($sender))
-            return true;
+		$playerHandler = MineceitCore::getPlayerHandler();
 
-        $playerHandler = MineceitCore::getPlayerHandler();
+		$language = $sender instanceof MineceitPlayer ? $sender->getLanguageInfo()
+			->getLanguage() : $playerHandler->getLanguage();
 
-        $language = $sender instanceof MineceitPlayer ? $sender->getLanguage() : $playerHandler->getLanguage();
+		$message = $language->getPermissionMessage();
 
-        $message = $language->getPermissionMessage();
+		$sender->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $message);
 
-        $sender->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $message);
-
-        return false;
-    }
+		return false;
+	}
 }

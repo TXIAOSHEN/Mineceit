@@ -1,66 +1,68 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-07-26
- * Time: 22:37
- */
 
 declare(strict_types=1);
 
 namespace mineceit\commands\basic;
 
-
 use mineceit\commands\MineceitCommand;
 use mineceit\game\FormUtil;
 use mineceit\MineceitUtil;
-use mineceit\player\language\Language;
 use mineceit\player\MineceitPlayer;
 use pocketmine\command\CommandSender;
 use pocketmine\command\utils\CommandException;
 use pocketmine\utils\TextFormat;
 
-class FreezeCommand extends MineceitCommand
-{
+class FreezeCommand extends MineceitCommand{
 
-    public function __construct()
-    {
-        parent::__construct('freeze', 'Freeze/Unfreeze a player.', 'Usage: /freeze', []);
-        parent::setPermission('mineceit.permissions.freeze');
-    }
+	public function __construct(){
+		parent::__construct('freeze', 'Freeze/Unfreeze a player.', 'Usage: /freeze', []);
+		parent::setPermission('mineceit.permissions.freeze');
+	}
 
-    /**
-     * @param CommandSender $sender
-     * @param string $commandLabel
-     * @param string[] $args
-     *
-     * @return mixed
-     * @throws CommandException
-     */
-    public function execute(CommandSender $sender, string $commandLabel, array $args) {
+	/**
+	 * @param CommandSender $sender
+	 * @param string        $commandLabel
+	 * @param string[]      $args
+	 *
+	 * @return mixed
+	 * @throws CommandException
+	 */
+	public function execute(CommandSender $sender, string $commandLabel, array $args){
 
-        $message = null;
+		$message = null;
 
-        if($sender instanceof MineceitPlayer){
+		if($sender instanceof MineceitPlayer){
 
-            if($this->testPermission($sender) and $this->canUseCommand($sender)) {
+			if($this->testPermission($sender) && $this->canUseCommand($sender)){
 
-                $onlinePlayers = $sender->getServer()->getOnlinePlayers();
-                $online = [];
+				$sname = $sender->getName();
 
-                foreach($onlinePlayers as $player) {
-                    $name = $player->getDisplayName();
-                    $online[] = $name;
-                }
+				$onlinePlayers = $sender->getServer()->getOnlinePlayers();
+				$online = [];
 
-                $form = FormUtil::getFreezeForm($sender, $online);
+				foreach($onlinePlayers as $player){
+					$name = $player->getDisplayName();
+					if($name !== $sname)
+						$online[] = $name;
+				}
 
-                $sender->sendFormWindow($form, ['online-players' => $online]);
-            }
-        } else $message = TextFormat::RED . "Console can't use this command.";
+				$form = FormUtil::getFreezeForm($sender, $online);
 
-        if($message !== null) $sender->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $message);
+				$sender->sendFormWindow($form, ['online-players' => $online]);
+			}
+		}else $message = TextFormat::RED . "Console can't use this command.";
 
-        return true;
-    }
+		if($message !== null) $sender->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $message);
+
+		return true;
+	}
+
+	public function testPermission(CommandSender $sender) : bool{
+
+		if($sender instanceof MineceitPlayer && $sender->hasHelperPermissions()){
+			return true;
+		}
+
+		return parent::testPermission($sender);
+	}
 }

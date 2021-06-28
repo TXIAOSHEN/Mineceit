@@ -1,15 +1,8 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2020-01-19
- * Time: 22:30
- */
 
 declare(strict_types=1);
 
 namespace mineceit\maitenance\reports\tasks;
-
 
 use mineceit\game\FormUtil;
 use mineceit\maitenance\reports\data\BugReport;
@@ -22,170 +15,165 @@ use mineceit\player\MineceitPlayer;
 use pocketmine\scheduler\AsyncTask;
 use pocketmine\Server;
 
-class AsyncTranslateReport extends AsyncTask
-{
+class AsyncTranslateReport extends AsyncTask{
 
-    const TRANSLATE_URL = "https://clients5.google.com/translate_a/t?client=dict-chrome-ex&";/*ie=UTF-8&oe=UTF-8&";*/
+	const TRANSLATE_URL = "https://clients5.google.com/translate_a/t?client=dict-chrome-ex&";/*ie=UTF-8&oe=UTF-8&";*/
 
-    /** @var string */
-    private $player;
+	/** @var string */
+	private $player;
 
-    /** @var string[]|array */
-    private $urls;
+	/** @var string[]|array */
+	private $urls;
 
-    /** @var string[]|array */
-    private $originals;
+	/** @var string[]|array */
+	private $originals;
 
-    /** @var string */
-    private $reportLocal;
+	/** @var string */
+	private $reportLocal;
 
-    /** @var bool */
-    private $history;
+	/** @var bool */
+	private $history;
 
-    public function __construct(string $playerName, string $translatedLang, ReportInfo $info, bool $history)
-    {
+	public function __construct(string $playerName, string $translatedLang, ReportInfo $info, bool $history){
 
-        $this->player = $playerName;
-        $this->reportLocal = $info->getLocalName();
-        $this->history = $history;
+		$this->player = $playerName;
+		$this->reportLocal = $info->getLocalName();
+		$this->history = $history;
 
-        $originals = [];
+		$originals = [];
 
-        if($info instanceof HackReport) {
+		if($info instanceof HackReport){
 
-            $originals = [
-                "reason" => $info->getReason()
-            ];
+			$originals = [
+				"reason" => $info->getReason()
+			];
+		}elseif($info instanceof StaffReport){
 
-        } elseif ($info instanceof StaffReport) {
+			$originals = [
+				"reason" => $info->getReason()
+			];
+		}elseif($info instanceof BugReport){
 
-            $originals = [
-                "reason" => $info->getReason()
-            ];
+			$originals = [
+				"desc" => $info->getDescription(),
+				"reproduce" => $info->getReproduceInfo()
+			];
+		}
 
-        } elseif ($info instanceof BugReport) {
+		$this->originals = $originals;
 
-            $originals = [
-                "desc" => $info->getDescription(),
-                "reproduce" => $info->getReproduceInfo()
-            ];
-        }
+		$auto = TranslateUtil::AUTO;
 
-        $this->originals = $originals;
+		$urls = [];
 
-        $auto = TranslateUtil::AUTO;
+		foreach($originals as $key => $msg){
+			$url = self::TRANSLATE_URL . "sl={$auto}&tl={$translatedLang}&dt=t&q=" . urlencode($msg);
+			$urls[$key] = $url;
+		}
 
-        $urls = [];
+		$this->urls = $urls;
+	}
 
-        foreach($originals as $key => $msg) {
-            $url = self::TRANSLATE_URL . "sl={$auto}&tl={$translatedLang}&dt=t&q=" . urlencode($msg);
-            $urls[$key] = $url;
-        }
+	/**
+	 * Actions to execute when run
+	 *
+	 * @return void
+	 */
+	public function onRun(){
 
-        $this->urls = $urls;
-    }
+		$urls = (array) $this->urls;
+		$originals = (array) $this->originals;
 
-    /**
-     * Actions to execute when run
-     *
-     * @return void
-     */
-    public function onRun()
-    {
+		$translates = [];
 
-        $urls = (array)$this->urls;
-        $originals = (array)$this->originals;
+		foreach($urls as $key => $url){
 
-        $translates = [];
+			$curl = $this->curl_info($url);
 
-        foreach($urls as $key => $url) {
+			$response = curl_exec($curl);
+			curl_close($curl);
 
-            $curl = $this->curl_info($url);
+			if(is_bool($response)){
+				$translates[$key] = ["translated" => $originals[$key], "original" => $originals[$key], "original_lang" => ""];
+				continue;
+			}
 
-            $response = curl_exec($curl);
-            curl_close($curl);
+			$output = json_decode($response, true);
+			$result = $output['sentences'][0];
+			$translated = $result['trans'];
+			$originalLanguage = $output['src'];
+			$translates[$key] = ["translated" => $translated, "original" => $originals[$key], "original_lang" => $originalLanguage];
+		}
 
-            if(is_bool($response)) {
-                $translates[$key] = ["translated" => $originals[$key], "original" => $originals[$key], "original_lang" => ""];
-                continue;
-            }
+		$this->setResult(["info" => $translates]);
+	}
 
-            $output = json_decode($response, true);
-            $result = $output['sentences'][0];
-            $translated = $result['trans'];
-            $originalLanguage = $output['src'];
-            $translates[$key] = ["translated" => $translated, "original" => $originals[$key], "original_lang" => $originalLanguage];
-        }
+	/**
+	 * @param string $url
+	 * @param string $encoding
+	 *
+	 * @return false|resource
+	 */
+	private function curl_info(string $url, $encoding = "utf-8") : bool{
 
-        $this->setResult(["info" => $translates]);
-    }
+		$headers = [
+			"Content-Type: application/json;charset=\"{$encoding}\""
+		];
 
-    /**
-     * @param string $url
-     * @param string $encoding
-     *
-     * @return false|resource
-     */
-    private function curl_info(string $url, $encoding = "utf-8") {
+		$curl = curl_init();
+		curl_setopt($curl, CURLOPT_URL, $url . "&ie=utf-8&oe={$encoding}");
+		curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
+		curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+		curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
+		curl_setopt($curl, CURLOPT_ENCODING, "");
 
-        $headers = [
-            "Content-Type: application/json;charset=\"{$encoding}\""
-        ];
+		return $curl;
+	}
 
-        $curl = curl_init();
-        curl_setopt($curl, CURLOPT_URL, $url . "&ie=utf-8&oe={$encoding}");
-        curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, false);
-        curl_setopt($curl, CURLOPT_ENCODING, "");
+	public function onCompletion(Server $server){
 
-        return $curl;
-    }
+		$core = $server->getPluginManager()->getPlugin('Mineceit');
 
-    public function onCompletion(Server $server)
-    {
+		$result = $this->getResult();
 
-        $core = $server->getPluginManager()->getPlugin('Mineceit');
+		if($core instanceof MineceitCore && $core->isEnabled() && ($player = $server->getPlayer($this->player)) !== null && $player instanceof MineceitPlayer){
 
-        $result = $this->getResult();
+			$reportManager = MineceitCore::getReportManager();
+			$lang = $player->getLanguageInfo()
+				->getLanguage()->getTranslationName(TranslateUtil::GOOGLE_TRANSLATE);
 
-        if($core instanceof MineceitCore and $core->isEnabled() and ($player = $server->getPlayer($this->player)) !== null and $player instanceof MineceitPlayer) {
+			if($result !== null){
 
-            $reportManager = MineceitCore::getReportManager();
-            $lang = $player->getLanguage()->getTranslationName(TranslateUtil::GOOGLE_TRANSLATE);
+				$result = $result['info'];
 
-            if($result !== null) {
+				$array = [];
 
-                $result = $result['info'];
+				foreach($result as $key => $value){
 
-                $array = [];
+					$translated = $value['translated'];
+					$original = $value['original'];
 
-                foreach($result as $key => $value) {
+					$origLang = $value['original_lang'];
+					if(strtolower($translated) === strtolower($original) || $origLang === "" || $origLang === $lang){
+						$translated = $value["original"];
+					}
 
-                    $translated = $value['translated'];
-                    $original = $value['original'];
+					$array[$key] = $translated;
+				}
 
-                    $origLang = $value['original_lang'];
-                    if(strtolower($translated) === strtolower($original) or $origLang === "" or $origLang === $lang) {
-                        $translated = $value["original"];
-                    }
+				$report = $reportManager->getReport($this->reportLocal);
 
-                    $array[$key] = $translated;
-                }
+				$perm = $player->getReportPermissions();
 
-                $report = $reportManager->getReport($this->reportLocal);
+				$form = FormUtil::getInfoOfReportForm($report, $player, $array);
+				$player->sendFormWindow($form, ['perm' => $perm, 'report' => $report, 'history' => $this->history]);
+			}
+		}
 
-                $perm = $player->getReportPermissions();
-
-                $form = FormUtil::getInfoOfReportForm($report, $player, $array);
-                $player->sendFormWindow($form, ['perm' => $perm, 'report' => $report, 'history' => $this->history]);
-            }
-        }
-
-        /*
-         *   $form = self::getInfoOfReportForm($report, $event);
-         *
-         *   $event->sendFormWindow($form, ['history' => $history, 'perm' => $perm, 'report' => $report]);
-         */
-    }
+		/*
+		 *   $form = self::getInfoOfReportForm($report, $event);
+		 *
+		 *   $event->sendFormWindow($form, ['history' => $history, 'perm' => $perm, 'report' => $report]);
+		 */
+	}
 }

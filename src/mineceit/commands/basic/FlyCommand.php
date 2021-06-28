@@ -1,15 +1,8 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-08-01
- * Time: 13:28
- */
 
 declare(strict_types=1);
 
 namespace mineceit\commands\basic;
-
 
 use mineceit\commands\MineceitCommand;
 use mineceit\MineceitUtil;
@@ -19,55 +12,51 @@ use pocketmine\command\CommandSender;
 use pocketmine\command\utils\CommandException;
 use pocketmine\utils\TextFormat;
 
-class FlyCommand extends MineceitCommand
-{
+class FlyCommand extends MineceitCommand{
 
-    public function __construct()
-    {
-        parent::__construct('fly', 'Gives players the ability to fly.', 'Usage: /fly', []);
-        parent::setPermission('mineceit.permission.fly');
-    }
+	public function __construct(){
+		parent::__construct('fly', 'Gives players the ability to fly.', 'Usage: /fly', []);
+		parent::setPermission('mineceit.permission.fly');
+	}
 
-    /**
-     * @param CommandSender $sender
-     * @param string $commandLabel
-     * @param string[] $args
-     *
-     * @return mixed
-     * @throws CommandException
-     */
-    public function execute(CommandSender $sender, string $commandLabel, array $args)
-    {
-        $message = null;
+	/**
+	 * @param CommandSender $sender
+	 * @param string        $commandLabel
+	 * @param string[]      $args
+	 *
+	 * @return mixed
+	 * @throws CommandException
+	 */
+	public function execute(CommandSender $sender, string $commandLabel, array $args){
+		$message = null;
 
-        if($sender instanceof MineceitPlayer){
+		if($sender instanceof MineceitPlayer){
 
-            $lang = $sender->getLanguage();
+			$lang = $sender->getLanguageInfo()->getLanguage();
 
-            if($this->testPermission($sender) and $this->canUseCommand($sender)) {
+			if($this->testPermission($sender) && $this->canUseCommand($sender)){
 
-                if(!$sender->isPlayerFlying()) {
-                    $message = $lang->generalMessage(Language::NOW_FLYING);
-                    $sender->setPlayerFlying(true);
-                } else {
-                    $message = $lang->generalMessage(Language::NO_LONGER_FLYING);
-                    $sender->setPlayerFlying(false);
-                }
-            }
-        } else $message = TextFormat::RED . "Console can't use this command.";
+				if(!$sender->getAllowFlight()){
+					$message = $lang->generalMessage(Language::NOW_FLYING);
+					$sender->getExtensions()->enableFlying(true);
+				}else{
+					$message = $lang->generalMessage(Language::NO_LONGER_FLYING);
+					$sender->getExtensions()->enableFlying(false);
+				}
+			}
+		}else $message = TextFormat::RED . "Console can't use this command.";
 
-        if($message !== null) $sender->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $message);
+		if($message !== null) $sender->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $message);
 
-        return true;
-    }
+		return true;
+	}
 
-    public function testPermission(CommandSender $sender): bool
-    {
+	public function testPermission(CommandSender $sender) : bool{
 
-        if($sender instanceof MineceitPlayer and $sender->hasFlightPermission()) {
-            return true;
-        }
+		if($sender instanceof MineceitPlayer && $sender->canFlyInLobby()){
+			return true;
+		}
 
-        return parent::testPermission($sender);
-    }
+		return parent::testPermission($sender);
+	}
 }

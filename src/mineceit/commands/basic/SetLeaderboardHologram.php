@@ -1,15 +1,8 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-08-03
- * Time: 20:46
- */
 
 declare(strict_types=1);
 
 namespace mineceit\commands\basic;
-
 
 use mineceit\commands\MineceitCommand;
 use mineceit\MineceitCore;
@@ -20,74 +13,66 @@ use pocketmine\command\CommandSender;
 use pocketmine\command\utils\CommandException;
 use pocketmine\utils\TextFormat;
 
-class SetLeaderboardHologram extends MineceitCommand
-{
+class SetLeaderboardHologram extends MineceitCommand{
 
-    public function __construct()
-    {
-        parent::__construct('setLeaderboardHologram', 'Places either a elo or stats leaderboard hologram at current position.', 'Usage: /setLeaderboardHologram <elo:stats>', ['setLB', 'setlb']);
-        parent::setPermission('mineceit.permission.leaderboard');
-    }
+	public function __construct(){
+		parent::__construct('setLeaderboardHologram', 'Places either a elo or stats leaderboard hologram at current position.', 'Usage: /setLeaderboardHologram <elo:stats:rule:rank>', ['setLB', 'setlb']);
+		parent::setPermission('mineceit.permission.leaderboard');
+	}
 
-    /**
-     * @param CommandSender $sender
-     * @param string $commandLabel
-     * @param string[] $args
-     *
-     * @return mixed
-     * @throws CommandException
-     */
-    public function execute(CommandSender $sender, string $commandLabel, array $args)
-    {
-        $msg = null;
+	/**
+	 * @param CommandSender $sender
+	 * @param string        $commandLabel
+	 * @param string[]      $args
+	 *
+	 * @return mixed
+	 * @throws CommandException
+	 */
+	public function execute(CommandSender $sender, string $commandLabel, array $args){
+		$msg = null;
 
-        if($sender instanceof MineceitPlayer) {
+		if($sender instanceof MineceitPlayer){
 
-            $p = $sender->getPlayer();
+			$p = $sender->getPlayer();
 
-            $language = $p->getLanguage();
+			$language = $p->getLanguageInfo()->getLanguage();
 
-            if ($this->testPermission($sender) and $this->canUseCommand($sender)) {
+			if($this->testPermission($sender) && $this->canUseCommand($sender)){
 
-                if($sender->isInHub()) {
+				if($sender->isInHub()){
 
-                    $count = count($args);
+					$count = count($args);
 
-                    $valid_parameters = ['elo', 'stats'];
+					$valid_parameters = ['elo', 'stats', 'rule', 'rank'];
 
-                    if($count === 1 and in_array(strtolower($args[0]), $valid_parameters)) {
+					if($count === 1 && in_array(strtolower($args[0]), $valid_parameters)){
 
-                        $param = strtolower($args[0]);
+						$param = strtolower($args[0]);
 
-                        MineceitCore::getLeaderboards()->setLeaderboardHologram($p, $param === 'elo');
+						MineceitCore::getLeaderboards()->setLeaderboardHologram($p, $param);
 
-                        $msg = $language->generalMessage(Language::PLACE_LEADERBOARD_HOLOGRAM);
+						$msg = $language->generalMessage(Language::PLACE_LEADERBOARD_HOLOGRAM);
+					}else{
 
-                    } else {
-
-                        $msg = $this->getUsage();
-                    }
-
-                } else $msg = $language->generalMessage(Language::ONLY_USE_IN_LOBBY);
-
-            }
-
-        }  else $msg = "Console can't use this command.";
+						$msg = $this->getUsage();
+					}
+				}else $msg = $language->generalMessage(Language::ONLY_USE_IN_LOBBY);
+			}
+		}else $msg = "Console can't use this command.";
 
 
-        if($msg !== null) $sender->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $msg);
+		if($msg !== null) $sender->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $msg);
 
-        return true;
-    }
+		return true;
+	}
 
 
-    public function testPermission(CommandSender $sender): bool
-    {
+	public function testPermission(CommandSender $sender) : bool{
 
-        if($sender instanceof MineceitPlayer and $sender->hasOwnerPermissions()) {
-            return true;
-        }
+		if($sender instanceof MineceitPlayer && $sender->hasOwnerPermissions()){
+			return true;
+		}
 
-        return parent::testPermission($sender);
-    }
+		return parent::testPermission($sender);
+	}
 }

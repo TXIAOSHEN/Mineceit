@@ -1,42 +1,46 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-07-07
- * Time: 13:50
- */
 
 declare(strict_types=1);
 
 namespace mineceit\player;
 
 use mineceit\arenas\FFAArena;
-use mineceit\fixes\player\PMPlayer;
-use mineceit\game\entities\FishingHook;
-use mineceit\game\FormUtil;
-use mineceit\kits\AbstractKit;
+use mineceit\data\players\AsyncSaveDonateVoteData;
+use mineceit\events\duels\MineceitEventDuel;
+use mineceit\game\behavior\FishingBehavior;
+use mineceit\game\behavior\IFishingBehaviorEntity;
+use mineceit\game\behavior\kits\IKitHolderEntity;
+use mineceit\game\behavior\kits\KitHolder;
+use mineceit\game\entities\bots\AbstractCombatBot;
+use mineceit\game\entities\EnderPearl as EPearl;
 use mineceit\maitenance\reports\data\ReportInfo;
 use mineceit\MineceitCore;
 use mineceit\MineceitUtil;
-use mineceit\network\requests\Request;
-use mineceit\network\requests\RequestPool;
-use mineceit\player\autodetector\checks\AbstractCheck;
-use mineceit\player\autodetector\checks\ConsistencyCheck;
-use mineceit\player\autodetector\checks\CPSCheck;
-use mineceit\player\autodetector\checks\DiggingCheck;
+use mineceit\parties\events\PartyEvent;
+use mineceit\parties\events\types\PartyDuel;
+use mineceit\parties\events\types\PartyGames;
+use mineceit\parties\MineceitParty;
 use mineceit\player\info\clicks\ClicksInfo;
+use mineceit\player\info\ClientInfo;
+use mineceit\player\info\device\DeviceIds;
+use mineceit\player\info\disguise\DisguiseInfo;
 use mineceit\player\info\duels\DuelInfo;
 use mineceit\player\info\duels\duelreplay\info\DuelReplayInfo;
+use mineceit\player\info\ips\IPInfo;
+use mineceit\player\info\kits\PlayerKitHolder;
+use mineceit\player\info\PlayerReportsInfo;
+use mineceit\player\info\ScoreboardInfo;
+use mineceit\player\info\settings\LanguageInfo;
+use mineceit\player\info\settings\SettingsInfo;
+use mineceit\player\info\stats\EloInfo;
+use mineceit\player\info\stats\StatsInfo;
 use mineceit\player\language\Language;
 use mineceit\player\ranks\Rank;
-use mineceit\player\tasks\OnDeathTask;
 use mineceit\scoreboard\Scoreboard;
 use pocketmine\command\CommandSender;
-use pocketmine\entity\Attribute;
 use pocketmine\entity\EffectInstance;
 use pocketmine\entity\Entity;
-use pocketmine\entity\EntityIds;
-use pocketmine\entity\projectile\Snowball;
+use pocketmine\entity\Human;
 use pocketmine\entity\Skin;
 use pocketmine\event\entity\EntityDamageByChildEntityEvent;
 use pocketmine\event\entity\EntityDamageByEntityEvent;
@@ -44,3937 +48,2609 @@ use pocketmine\event\entity\EntityDamageEvent;
 use pocketmine\event\entity\ProjectileLaunchEvent;
 use pocketmine\event\player\PlayerDeathEvent;
 use pocketmine\form\Form;
-use pocketmine\inventory\ArmorInventory;
 use pocketmine\item\Consumable;
 use pocketmine\item\EnderPearl;
 use pocketmine\item\Item;
 use pocketmine\item\Potion;
 use pocketmine\item\SplashPotion;
-use pocketmine\lang\TextContainer;
-use pocketmine\level\Position;
-use pocketmine\math\Vector3;
 use pocketmine\network\mcpe\protocol\AnimatePacket;
-use pocketmine\network\mcpe\protocol\GameRulesChangedPacket;
-use pocketmine\network\mcpe\protocol\LevelSoundEventPacket;
-use pocketmine\network\mcpe\protocol\LoginPacket;
 use pocketmine\network\mcpe\protocol\PlayerActionPacket;
-use pocketmine\network\mcpe\protocol\ProtocolInfo;
-use pocketmine\network\mcpe\protocol\SetTitlePacket;
+use pocketmine\Player;
+use pocketmine\Server;
+use pocketmine\utils\Config;
 use pocketmine\utils\TextFormat;
 
-class MineceitPlayer extends PMPlayer
-{
-
-    public const TAG_DUELS = 'tag.duels';
-    public const TAG_NORMAL = 'tag.normal';
-
-    public const PERMISSION_BUILDER_MODE = 'place-break';
-    public const PERMISSION_TAG = 'tag';
-    public const PERMISSION_RESERVE_EVENT_SLOT = 'event';
-    public const PERMISSION_LIGHTNING_ON_DEATH = 'lightning';
-
-    public const ANDROID = 1;
-    public const IOS = 2;
-    public const OSX = 3;
-    public const FIREOS = 4;
-    public const VRGEAR = 5;
-    public const VRHOLOLENS = 6;
-    public const WINDOWS_10 = 7;
-    public const WINDOWS_32 = 8;
-    public const DEDICATED = 9;
-    public const TVOS = 10;
-    public const PS4 = 11;
-    public const SWITCH = 12;
-    public const XBOX = 13;
-
-    public const LINUX = 20; // For linux people.
-
-    public const KEYBOARD = 1;
-    public const TOUCH = 2;
-    public const CONTROLLER = 3;
-    public const MOTION_CONTROLLER = 4;
-
-    // Declare the instance variables.
-
-    /** @var array */
-    private $reports = []; // Prevents report spam.
-
-    private $tagType = self::TAG_NORMAL;
-
-    /* @var string */
-    protected $version = ProtocolInfo::MINECRAFT_VERSION_NETWORK;
-
-    /* @var Scoreboard|null */
-    private $scoreboard = null;
-
-    /* @var string */
-    private $scoreboardType = Scoreboard::SCOREBOARD_NONE;
-
-    private $formData = [];
-
-    /* @var string|null */
-    private $currentKit = null;
-
-    /* @var FishingHook|null */
-    private $fishing = null;
-
-    /** @var bool */
-    private $lookingAtForm = false;
-
-    /** @var bool */
-    private $displayPlayer = true;
-
-    /* @var bool */
-    private $spectatorMode = false;
-
-    /* Combat values */
-    private $secsInCombat = 0;
-    private $combat = false;
-
-    /* Enderpearl values */
-    private $secsEnderpearl = 0;
-    private $throwPearl = true;
-
-    /** @var int
-     * Determines how many seconds the player has een on the server.
-     */
-    private $currentSecond = 0;
-
-    /* @var FFAArena|null */
-    private $currentArena = null;
-
-    /* @var bool */
-    private $frozen = false;
-
-    /* @var array */
-    private $duelHistory = [];
-
-    /** @var bool */
-    private $dead = false;
-
-    private $spam = 0;
-    private $tellSpam = 0;
-
-    /** @var int */
-    private $limitedFeaturesTime = 0; //Determines whether the player has limited features.
-
-    /** @var int */
-    private $lastTimePlayed = -1; // Gets he time when the player played last.
-
-    /** @var array -> Gets the device OS Values */
-    private $deviceOSVals = [
-        self::ANDROID => 'Android',
-        self::IOS => 'iOS',
-        self::OSX => 'OSX',
-        self::FIREOS => 'FireOS',
-        self::VRGEAR => 'VRGear',
-        self::VRHOLOLENS => 'VRHololens',
-        self::WINDOWS_10 => 'Win10',
-        self::WINDOWS_32 => 'Win32',
-        self::DEDICATED => 'Dedicated',
-        self::TVOS => 'TVOS',
-        self::PS4 => 'PS4',
-        self::SWITCH => 'Nintendo Switch',
-        self::XBOX => 'Xbox',
-        self::LINUX => 'Linux'
-    ];
-
-    /** @var array -> Gets the input values. */
-    private $inputVals = [
-        self::KEYBOARD => 'Keyboard',
-        self::TOUCH => 'Touch',
-        self::CONTROLLER => 'Controller',
-        self::MOTION_CONTROLLER => 'Motion-Controller'
-    ];
-
-    // TODO
-    /* private $guiScaleVals = [
-        -2 => "Minimum",
-        -1 => "Medium",
-        0 => "Maximum"
-    ]; */
-
-    /** @var array -> Gets the ui values. */
-    const UI_VALUES = ['Classic UI', 'Pocket UI'];
-
-    /** @var int */
-    private $ping = 0;
-
-    /* @var array */
-    private $playerData = [];
-
-    /** @var array|null */
-    private $disguised = null;
-
-    /** @var bool
-     * Enables translation of other player's messages. */
-    private $translate = false;
-
-    /** @var array */
-    private $reportsSearchHistory = [];
-
-    /** @var bool */
-    private $swishSound = true;
-
-    /** @var bool */
-    private $previousLimitedFeat = false; // Determines whether player has previous limited feature.
-
-    /** @var CPSCheck|null */
-    private $clickSpeedCheck = null;
-    /** @var DiggingCheck|null */
-    private $diggingCheck = null;
-    /** @var ConsistencyCheck|null */
-    private $consistencyCheck = null;
-
-    /** @var int */
-    private $lastAction = -1;
-    /** @var int */
-    private $lastActionTime = -1;
-
-    /** @var int */
-    private $currentAction = -1;
-    /** @var int */
-    private $currentActionTime = -1;
-
-    /** @var ClicksInfo|null */
-    private $clicksInfo;
-
-    /** @var bool */
-    private $loadedData = false;
-
-    // ---------------------------------- PLAYER DATA -----------------------------------
-
-    /** @var int */
-    private $kills = 0, $deaths = 0;
-
-    /** @var bool */
-    private $peOnly = false, $scoreboardEnabled = true, $builderMode = false, $muted = false, $changeTag = false, $lightningEnabled = false;
-
-    /** @var array */
-    private $builderLevels = [];
-
-    /** @var string */
-    private $currentLang = Language::ENGLISH_US;
-
-    /** @var string */
-    private $customTag = '';
-
-    /** @var bool */
-    private $particlesEnabled = false;
-
-    /** @var int[] */
-    private $elo = [];
-
-    /** @var array|Rank[] */
-    private $ranks = [];
-
-    /**
-     * @return bool
-     */
-    public function isDisplayPlayers(): bool
-    {
-
-        //return $this->displayPlayer;
-        // TODO RE ADD EVENTUALLY
-        return $this->displayPlayer;
-    }
-
-    public function showPlayers(bool $changeVal = true): void
-    {
-        $this->displayPlayer = $changeVal;
-        // TODO RE ADD EVENTUALLY
-
-        /* $this->displayPlayers(false);
-        if($changeVal === false)
-            $this->displayPlayer = true; */
-    }
-
-    public function hidePlayers(bool $changeVal = true): void
-    {
-        $this->displayPlayer = $changeVal;
-        // TODO RE ADD EVENTUALLY
-
-        /* $this->displayPlayers(true);
-        if($changeVal === false)
-            $this->displayPlayer = false; */
-    }
-
-    /**
-     * @param bool $hide
-     */
-    private function displayPlayers(bool $hide = false): void
-    {
-
-        $players = $this->getLevel()->getPlayers();
-
-        if ($hide === true) {
-
-            foreach ($players as $player) {
-                $name = $player->getName();
-                if ($name === $this->getName())
-                    continue;
-
-                $this->hidePlayer($player);
-            }
-        } else {
-
-            foreach ($players as $player) {
-
-                $name = $player->getName();
-                if ($name === $this->getName())
-                    continue;
-
-                $this->showPlayer($player);
-            }
-        }
-
-        $this->displayPlayer = !$hide;
-    }
-
-    /**
-     * Occurs once this player joins the world.
-     */
-    public function onJoin(): void
-    {
-
-        // Init everything.
-        $this->clicksInfo = new ClicksInfo($this);
-        $this->clickSpeedCheck = new CPSCheck($this);
-        $this->diggingCheck = new DiggingCheck($this);
-        $this->consistencyCheck = new ConsistencyCheck($this);
-    }
-
-
-    /**
-     * @param LoginPacket $pkt
-     * @return bool
-     *
-     * Handles the login sequence.
-     */
-    public function handleLogin(LoginPacket $pkt): bool
-    {
-
-        $result = parent::handleLogin($pkt);
-
-        if (!$result) {
-            return false;
-        }
-
-        // Hack for getting device model & os for xbox & linux.
-        // Could change in the future.
-
-        $clientData = $pkt->clientData;
-        $this->version = $clientData["GameVersion"];
-
-        $deviceModel = (string)$clientData["DeviceModel"];
-        $deviceOS = (int)$clientData["DeviceOS"];
-
-        if (trim($deviceModel) === "") {
-            switch ($deviceOS) {
-                case self::ANDROID:
-                    $deviceOS = self::LINUX;
-                    $deviceModel = "Linux";
-                    break;
-                case self::XBOX:
-                    $deviceModel = "Xbox One";
-                    break;
-            }
-        }
-
-        $clientData["DeviceModel"] = $deviceModel;
-        $clientData["DeviceOS"] = $deviceOS;
-
-        $this->playerData['clientData'] = $clientData;
-        $this->playerData['clientId'] = $pkt->clientId;
-        $this->playerData['clientUUID'] = $pkt->clientUUID;
-        $this->playerData['chainData'] = $pkt->chainData;
-
-        return $result;
-    }
-
-    protected function completeLoginSequence()
-    {
-        parent::completeLoginSequence();
-        $ipManager = MineceitCore::getPlayerHandler()->getIPManager();
-        $ipManager->checkIPSafe($this);
-    }
-
-    /**
-     * @param string $scoreboardType
-     */
-    public function setScoreboard(string $scoreboardType): void
-    {
-
-        switch ($scoreboardType) {
-            case Scoreboard::SCOREBOARD_SPAWN:
-                $this->setSpawnScoreboard();
-                break;
-            case Scoreboard::SCOREBOARD_DUEL:
-                $this->setDuelScoreboard();
-                break;
-            case Scoreboard::SCOREBOARD_FFA:
-                $this->setFFAScoreboard();
-                break;
-            case Scoreboard::SCOREBOARD_SPECTATOR:
-                $this->setSpectatorScoreboard();
-                break;
-            case Scoreboard::SCOREBOARD_REPLAY:
-                $this->setReplayScoreboard();
-                break;
-            case Scoreboard::SCOREBOARD_EVENT_SPEC:
-                $this->setEventSpectatorScoreboard();
-                break;
-            case Scoreboard::SCOREBOARD_EVENT_DUEL:
-                $this->setEventDuelScoreboard();
-                break;
-            default:
-        }
-    }
-
-    /**
-     * Sets the spawn scoreboard.
-     */
-    private function setSpawnScoreboard(): void
-    {
-
-        $title = TextFormat::GRAY . TextFormat::BOLD . '» ' . MineceitUtil::getServerName(true) . TextFormat::GRAY . ' «';
-
-        $language = $this->getLanguage();
-
-        $onlineStr = $language->scoreboard(Language::SPAWN_SCOREBOARD_ONLINE);
-        $inFightsStr = $language->scoreboard(Language::SPAWN_SCOREBOARD_INFIGHTS);
-        $inQueuesStr = $language->scoreboard(Language::SPAWN_SCOREBOARD_INQUEUES);
-
-        $server = $this->getServer();
-
-        if ($this->scoreboard === null)
-            $this->scoreboard = new Scoreboard($this, $title);
-        else $this->scoreboard->clearScoreboard();
-
-        $online = count($server->getOnlinePlayers());
-
-        $inQueues = MineceitCore::getDuelHandler()->getEveryoneInQueues();
-
-        $color = MineceitUtil::getThemeColor();
-
-        $onlineSb = TextFormat::WHITE . " $onlineStr: " . $color . $online;
-        $inFightsSb = TextFormat::WHITE . " $inFightsStr: " . $color . '0 ';
-        $inQueuesSb = TextFormat::WHITE . " $inQueuesStr: " . $color . "$inQueues ";
-
-        if ($language->getLocale() === Language::ARABIC) {
-            $onlineSb = ' ' . $color . $online . TextFormat::WHITE . " :$onlineStr";
-            $inFightsSb = ' ' . $color . '0 ' . TextFormat::WHITE . ":$inFightsStr";
-            $inQueuesSb = ' ' . $color . '0 ' . TextFormat::WHITE . ":$inQueuesStr";
-        }
-
-        $this->scoreboard->addLine(0, '                 ');
-        $this->scoreboard->addLine(1, $onlineSb);
-
-        $this->scoreboard->addLine(2, '');
-        $this->scoreboard->addLine(3, TextFormat::WHITE . ' Ping: ' . $color . $this->getPing());
-        $this->scoreboard->addLine(4, ' ');
-        $this->scoreboard->addLine(5, $inFightsSb);
-
-        $this->scoreboard->addLine(6, $inQueuesSb);
-        $this->scoreboard->addLine(7, '  ');
-
-        $duelHandler = MineceitCore::getDuelHandler();
-
-        $this->scoreboardType = Scoreboard::SCOREBOARD_SPAWN;
-
-        if ($this->isInQueue()) {
-            $queue = $duelHandler->getQueueOf($this);
-            $this->addQueueToScoreboard($queue->isRanked(), $queue->getQueue());
-        } else $this->scoreboard->addLine(8, TextFormat::GRAY . ' Twitter ' . TextFormat::WHITE . '@MineCeit ');
-    }
-
-    private function setDuelScoreboard(): void
-    {
-
-        $title = TextFormat::GRAY . TextFormat::BOLD . '» ' . MineceitUtil::getServerName(true) . TextFormat::GRAY . ' «';
-
-        $duelHandler = MineceitCore::getDuelHandler();
-
-        if ($this->scoreboard === null)
-            $this->scoreboard = new Scoreboard($this, $title);
-        else $this->scoreboard->clearScoreboard();
-
-        $duel = $duelHandler->getDuel($this);
-
-        $opponent = $duel->getOpponent($this);
-
-        $lang = $this->getLanguage();
-
-        $color = MineceitUtil::getThemeColor();
-
-        $durationStr = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_DURATION) . ': ' . $color . '00:00';
-        $opponentStrTop = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_OPPONENT) . ': ';
-        $opponentStrBottom = $color . ' ' . $opponent->getDisplayName() . ' ';
-        $yourPing = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_PING) . ': ' . $color . $this->getPing();
-        $theirPing = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_PING) . ': ' . $color . $opponent->getPing();
-        $yourCps = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_CPS) . ': ' . $color . 0 . ' ';
-        $theirCps = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_CPS) . ': ' . $color . 0 . ' ';
-
-        if ($lang->getLocale() === Language::ARABIC) {
-            $durationStr = $color . ' 00:00' . TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_DURATION);
-            $opponentStrTop = TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_OPPONENT);
-            $opponentStrBottom = $color . ' ' . $opponent->getDisplayName() . ' ';
-            $yourPing = $color . ' ' . $this->getPing() . TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_PING);
-            $theirPing = $color . ' ' . $opponent->getPing() . TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_PING);
-            $yourCps = ' ' . $color . 0 . TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_CPS) . ' ';
-            $theirCps = ' ' . $color . 0 . TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_CPS) . ' ';
-        }
-
-        $this->scoreboard->addLine(0, ' ');
-        $this->scoreboard->addLine(1, $durationStr);
-        $this->scoreboard->addLine(2, '     ');
-        $this->scoreboard->addLine(3, $opponentStrTop);
-        $this->scoreboard->addLine(4, $opponentStrBottom);
-        $this->scoreboard->addLine(5, '  ');
-        $this->scoreboard->addLine(6, $yourPing);
-        $this->scoreboard->addLine(7, $yourCps);
-        $this->scoreboard->addLine(8, '');
-        $this->scoreboard->addLine(9, $theirPing);
-        $this->scoreboard->addLine(10, $theirCps);
-        $this->scoreboard->addLine(11, '    ');
-        $this->scoreboard->addLine(12, TextFormat::GRAY . ' Twitter ' . TextFormat::WHITE . '@MineCeit ');
-
-        $this->scoreboardType = Scoreboard::SCOREBOARD_DUEL;
-    }
-
-    private function setSpectatorScoreboard(): void
-    {
-
-        $title = TextFormat::GRAY . TextFormat::BOLD . '» ' . MineceitUtil::getServerName(true) . TextFormat::GRAY . ' «';
-
-        if ($this->scoreboard === null)
-            $this->scoreboard = new Scoreboard($this, $title);
-        else $this->scoreboard->clearScoreboard();
-
-        $duelHandler = MineceitCore::getDuelHandler();
-
-        $duel = $duelHandler->getDuelFromSpec($this);
-
-        $lang = $this->getLanguage();
-
-        $color = MineceitUtil::getThemeColor();
-
-        if ($duel !== null) {
-
-            $ranked = $duel->isRanked();
-
-            $queue = $duel->getQueue();
-
-            $duration = $duel->getDuration();
-
-            $durationStr = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_DURATION) . ': ' . $color . "$duration";
-
-            $queueLineTop = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::SPAWN_SCOREBOARD_QUEUE) . ': ';
-            $queueLineBottom = ' ' . $color . $lang->getRankedStr($ranked) . ' ' . $queue . ' ';
-
-            $this->scoreboard->addLine(0, '     ');
-            $this->scoreboard->addLine(1, $durationStr);
-            $this->scoreboard->addLine(2, '   ');
-            $this->scoreboard->addLine(3, $queueLineTop);
-            $this->scoreboard->addLine(4, $queueLineBottom);
-            $this->scoreboard->addLine(5, ' ');
-            $this->scoreboard->addLine(6, TextFormat::GRAY . ' Twitter ' . TextFormat::WHITE . '@MineCeit ');
-
-            $this->scoreboardType = Scoreboard::SCOREBOARD_SPECTATOR;
-        }
-    }
-
-    private function setFFAScoreboard(): void
-    {
-
-        $title = TextFormat::GRAY . TextFormat::BOLD . '» ' . MineceitUtil::getServerName(true) . TextFormat::GRAY . ' «';
-
-        if ($this->scoreboard === null)
-            $this->scoreboard = new Scoreboard($this, $title);
-        else $this->scoreboard->clearScoreboard();
-
-        $language = $this->getLanguage();
-
-        $arenaStr = $language->scoreboard(Language::FFA_SCOREBOARD_ARENA);
-        $killsStr = $language->scoreboard(Language::FFA_SCOREBOARD_KILLS);
-        $deathsStr = $language->scoreboard(Language::FFA_SCOREBOARD_DEATHS);
-
-        $kills = $this->kills;
-        $deaths = $this->deaths;
-
-        $color = MineceitUtil::getThemeColor();
-
-        $arenaSb = TextFormat::WHITE . " $arenaStr: " . $color . $this->currentArena->getName();
-        $killsSb = TextFormat::WHITE . " $killsStr: " . $color . $kills;
-        $deathsSb = TextFormat::WHITE . " $deathsStr: " . $color . $deaths;
-
-        if ($language->getLocale() === Language::ARABIC) {
-            $arenaSb = ' ' . $color . $this->currentArena->getName() . TextFormat::WHITE . " :$arenaStr";
-            $killsSb = ' ' . $color . $kills . TextFormat::WHITE . " :$killsStr";
-            $deathsSb = ' ' . $color . $deaths . TextFormat::WHITE . " :$deathsStr";
-        }
-
-        $this->scoreboard->addLine(0, '                 ');
-        $this->scoreboard->addLine(1, $arenaSb);
-        $this->scoreboard->addLine(2, '');
-        $this->scoreboard->addLine(3, TextFormat::WHITE . ' Ping: ' . $color . $this->getPing());
-        $this->scoreboard->addLine(4, TextFormat::WHITE . " CPS: " . $color . 0);
-        $this->scoreboard->addLine(5, ' ');
-        $this->scoreboard->addLine(6, $killsSb);
-        $this->scoreboard->addLine(7, $deathsSb);
-        $this->scoreboard->addLine(8, '  ');
-        $this->scoreboard->addLine(9, TextFormat::GRAY . ' Twitter ' . TextFormat::WHITE . '@MineCeit ');
-
-        $this->scoreboardType = Scoreboard::SCOREBOARD_FFA;
-    }
-
-    private function setReplayScoreboard(): void
-    {
-
-        $title = TextFormat::GRAY . TextFormat::BOLD . '» ' . MineceitUtil::getServerName(true) . TextFormat::GRAY . ' «';
-
-        if ($this->scoreboard === null)
-            $this->scoreboard = new Scoreboard($this, $title);
-        else $this->scoreboard->clearScoreboard();
-
-        $lang = $this->getLanguage();
-
-        $replay = MineceitCore::getReplayManager()->getReplayFrom($this);
-
-        if ($replay !== null) {
-
-            $color = MineceitUtil::getThemeColor();
-
-            $queue = $replay->getQueue();
-            $ranked = $replay->isRanked();
-
-            $duration = $replay->getDuration();
-
-            $durationStrTop = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_DURATION) . ': ';
-            $durationStrBottom = ' ' . $color . "$duration" . TextFormat::WHITE . " | " . $color . $replay->getMaxDuration() . ' ';
-
-            $queueLineTop = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::SPAWN_SCOREBOARD_QUEUE) . ': ';
-            $queueLineBottom = ' ' . $color . $lang->getRankedStr($ranked) . ' ' . $queue . ' ';
-
-            if ($lang->getLocale() === Language::ARABIC) {
-                $durationStrTop = TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_DURATION);
-                $queueLineTop = TextFormat::WHITE . ' :' . $lang->scoreboard(Language::SPAWN_SCOREBOARD_QUEUE);
-            }
-
-            $this->scoreboard->addLine(0, '     ');
-            $this->scoreboard->addLine(1, $durationStrTop);
-            $this->scoreboard->addLine(2, $durationStrBottom);
-            $this->scoreboard->addLine(3, ' ');
-            $this->scoreboard->addLine(4, $queueLineTop);
-            $this->scoreboard->addLine(5, $queueLineBottom);
-            $this->scoreboard->addLine(6, '');
-            $this->scoreboard->addLine(7, TextFormat::GRAY . ' Twitter ' . TextFormat::WHITE . '@MineCeit ');
-
-            $this->scoreboardType = Scoreboard::SCOREBOARD_REPLAY;
-        }
-    }
-
-    /**
-     * Sets the event spectator scoreboard.
-     */
-    private function setEventSpectatorScoreboard(): void
-    {
-
-        $title = TextFormat::GRAY . TextFormat::BOLD . '» ' . MineceitUtil::getServerName(true) . TextFormat::GRAY . ' «';
-
-        if ($this->scoreboard === null)
-            $this->scoreboard = new Scoreboard($this, $title);
-        else $this->scoreboard->clearScoreboard();
-
-        $color = MineceitUtil::getThemeColor();
-        $lang = $this->getLanguage();
-
-        $event = MineceitCore::getEventManager()->getEventFromPlayer($this);
-
-        $eventType = $event->getName();
-        $players = strval($event->getPlayers(true));
-        $eliminated = strval($event->getEliminated(true));
-
-        $playersLine = " " . $lang->getMessage(Language::PLAYERS_LABEL) . ": {$color}{$players} ";
-        $eventTypeLine = " " . $lang->getMessage(Language::EVENT_SCOREBOARD_EVENT_TYPE, ["type" => $eventType]) . " ";
-        $eliminatedLine = " " . $lang->getMessage(Language::EVENT_SCOREBOARD_ELIMINATED, ["num" => $eliminated]) . " ";
-        if ($lang->getLocale() === Language::ARABIC) {
-            $playersLine = " {$color}{$players}" . TextFormat::WHITE . " :" . $lang->getMessage(Language::PLAYERS_LABEL) . " ";
-        }
-
-        $start = 1;
-
-        $this->scoreboard->addLine(0, '');
-        if (!$event->hasStarted()) {
-
-            $startingTime = $event->getTimeUntilStart();
-            $startingInLine = " " . $lang->getMessage(Language::EVENT_SCOREBOARD_STARTING_IN, ["time" => $startingTime]) . " ";
-
-            $this->scoreboard->addLine(1, $startingInLine);
-            $this->scoreboard->addLine(2, '   ');
-            $start = 3;
-        }
-
-        $this->scoreboard->addLine($start, $playersLine);
-        $this->scoreboard->addLine($start + 1, $eventTypeLine);
-        $this->scoreboard->addLine($start + 2, ' ');
-        $this->scoreboard->addLine($start + 3, $eliminatedLine);
-        $this->scoreboard->addLine($start + 4, '  ');
-        $this->scoreboard->addLine($start + 5, TextFormat::GRAY . ' Twitter ' . TextFormat::WHITE . '@MineCeit ');
-
-        $this->scoreboardType = Scoreboard::SCOREBOARD_EVENT_SPEC;
-    }
-
-    private function setEventDuelScoreboard(): void
-    {
-
-        $title = TextFormat::GRAY . TextFormat::BOLD . '» ' . MineceitUtil::getServerName(true) . TextFormat::GRAY . ' «';
-
-        if ($this->scoreboard === null)
-            $this->scoreboard = new Scoreboard($this, $title);
-        else $this->scoreboard->clearScoreboard();
-
-        $event = MineceitCore::getEventManager()->getEventFromPlayer($this);
-        $duel = $event->getCurrentDuel();
-
-        $opponent = $duel->getOpponent($this);
-
-        $color = MineceitUtil::getThemeColor();
-        $lang = $this->getLanguage();
-
-        $durationStr = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_DURATION) . ': ' . $color . '00:00';
-        $opponentStrTop = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_OPPONENT) . ': ';
-        $opponentStrBottom = $color . ' ' . $opponent->getDisplayName() . ' ';
-        $yourPing = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_PING) . ': ' . $color . $this->getPing();
-        $theirPing = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_PING) . ': ' . $color . $opponent->getPing();
-        $yourCps = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_CPS) . ': ' . $color . 0 . ' ';
-        $theirCps = TextFormat::WHITE . ' ' . $lang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_CPS) . ': ' . $color . 0 . ' ';
-
-        if ($lang->getLocale() === Language::ARABIC) {
-            $durationStr = $color . ' 00:00' . TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_DURATION);
-            $opponentStrTop = TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_OPPONENT);
-            $opponentStrBottom = $color . ' ' . $opponent->getDisplayName() . ' ';
-            $yourPing = $color . ' ' . $this->getPing() . TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_PING);
-            $theirPing = $color . ' ' . $opponent->getPing() . TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_PING);
-            $yourCps = ' ' . $color . 0 . TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_CPS) . ' ';
-            $theirCps = ' ' . $color . 0 . TextFormat::WHITE . ' :' . $lang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_CPS) . ' ';
-        }
-
-        $this->scoreboard->addLine(0, ' ');
-        $this->scoreboard->addLine(1, $durationStr);
-        $this->scoreboard->addLine(2, '     ');
-        $this->scoreboard->addLine(3, $opponentStrTop);
-        $this->scoreboard->addLine(4, $opponentStrBottom);
-        $this->scoreboard->addLine(5, '  ');
-        $this->scoreboard->addLine(6, $yourPing);
-        $this->scoreboard->addLine(7, $yourCps);
-        $this->scoreboard->addLine(8, '');
-        $this->scoreboard->addLine(9, $theirPing);
-        $this->scoreboard->addLine(10, $theirCps);
-        $this->scoreboard->addLine(11, '    ');
-        $this->scoreboard->addLine(12, TextFormat::GRAY . ' Twitter ' . TextFormat::WHITE . '@MineCeit ');
-
-        $this->scoreboardType = Scoreboard::SCOREBOARD_EVENT_DUEL;
-    }
-
-    public function addQueueToScoreboard(bool $ranked, string $queue): void
-    {
-
-        $language = $this->getLanguage();
-
-        $queueStr = $language->scoreboard(Language::SPAWN_SCOREBOARD_QUEUE);
-
-        $color = MineceitUtil::getThemeColor();
-
-        if ($this->scoreboardType === Scoreboard::SCOREBOARD_SPAWN) {
-            $this->scoreboard->addLine(8, " $queueStr:");
-            $this->scoreboard->addLine(9, ' ' . $color . $language->getRankedStr($ranked) . ' ' . $queue . ' ');
-            $this->scoreboard->addLine(10, '    ');
-            $this->scoreboard->addLine(11, TextFormat::GRAY . ' Twitter ' . TextFormat::WHITE . '@MineCeit ');
-        }
-    }
-
-    public function removeQueueFromScoreboard(): void
-    {
-
-        if ($this->scoreboardType === Scoreboard::SCOREBOARD_SPAWN) {
-            $this->scoreboard->removeLine(10);
-            $this->scoreboard->removeLine(9);
-            $this->scoreboard->addLine(8, TextFormat::GRAY . ' Twitter ' . TextFormat::WHITE . '@MineCeit ');
-        }
-    }
-
-    public function addPausedToScoreboard(): void
-    {
-
-        $language = $this->getLanguage();
-
-        $paused = $language->scoreboard(Language::SCOREBOARD_REPLAY_PAUSED);
-
-        if ($this->scoreboardType === Scoreboard::SCOREBOARD_REPLAY) {
-            $this->scoreboard->addLine(7, TextFormat::RED . TextFormat::BOLD . " $paused");
-            $this->scoreboard->addLine(8, '        ');
-            $this->scoreboard->addLine(9, TextFormat::GRAY . ' Twitter ' . TextFormat::WHITE . '@MineCeit ');
-        }
-    }
-
-    public function removePausedFromScoreboard(): void
-    {
-
-        if ($this->scoreboardType === Scoreboard::SCOREBOARD_REPLAY) {
-            $this->scoreboard->removeLine(9);
-            $this->scoreboard->removeLine(8);
-            $this->scoreboard->addLine(7, TextFormat::GRAY . ' Twitter ' . TextFormat::WHITE . '@MineCeit ');
-        }
-    }
-
-    public function removeScoreboard(): void
-    {
-
-        if ($this->scoreboard !== null)
-            $this->scoreboard->removeScoreboard();
-
-        $this->scoreboardType = Scoreboard::SCOREBOARD_NONE;
-        $this->scoreboard = null;
-    }
-
-    /**
-     * Reloads the scoreboard.
-     */
-    public function reloadScoreboard(): void
-    {
-        $this->setScoreboard($this->scoreboardType);
-    }
-
-    /**
-     * @param int $id
-     * @param string $line
-     */
-    public function updateLineOfScoreboard(int $id, string $line): void
-    {
-        if ($this->scoreboard !== null and $this->scoreboardType !== Scoreboard::SCOREBOARD_NONE) {
-            $this->scoreboard->addLine($id, $line);
-        }
-    }
-
-    /**
-     * @return string
-     */
-    public function getScoreboardType(): string
-    {
-        return $this->scoreboardType;
-    }
-
-    /**
-     * @param MineceitPlayer|CommandSender $player
-     * @return bool
-     */
-    public function equalsPlayer($player): bool
-    {
-        if ($player !== null and $player instanceof MineceitPlayer)
-            return $player->getName() === $this->getName() and $player->getId() === $this->getId();
-        return false;
-    }
-
-    /**
-     * @return int
-     */
-    public function getClientRandomID(): int
-    {
-        return intval($this->playerData['clientData']['ClientRandomId']);
-    }
-
-    /**
-     * @return string
-     */
-    public function getDeviceId(): string
-    {
-        return strval($this->playerData['clientData']['DeviceId']);
-    }
-
-    /**
-     * @return string
-     */
-    public function getDeviceModel(): string
-    {
-
-        $model = (string)$this->playerData['clientData']['DeviceModel'];
-
-        $info = MineceitCore::getPlayerHandler()->getDeviceInfo();
-
-        return $info->getDeviceFromModel($model) ?? $model;
-    }
-
-    /**
-     * @param bool $strval
-     * @return int|string
-     */
-    public function getDeviceOS(bool $strval = false)
-    {
-
-        $osVal = intval($this->playerData['clientData']['DeviceOS']);
-        $result = $strval ? 'Unknown' : $osVal;
-        if ($strval === true and isset($this->deviceOSVals[$osVal])) {
-            $result = strval($this->deviceOSVals[$osVal]);
-        }
-
-        return $result;
-    }
-
-    /**
-     * @param bool $strval
-     * @return int|string
-     */
-    public function getInput(bool $strval = false)
-    {
-        $input = intval($this->playerData['clientData']['CurrentInputMode']);
-        $result = ($strval === true) ? 'Unknown' : $input;
-        if ($strval === true and isset($this->inputVals[$input])) {
-            $result = strval($this->inputVals[$input]);
-        }
-        return $result;
-    }
-
-    /**
-     * @return string
-     */
-    public function getUIProfile(): string
-    {
-        $data = $this->playerData['clientData'];
-        $result = 'Unknown';
-        if (isset($data['UIProfile'])) {
-            $result = strval(self::UI_VALUES[$data['UIProfile']]);
-        }
-        return $result;
-    }
-
-    /**
-     * @return MineceitPlayer|null
-     */
-    public function getPlayer()
-    {
-        return $this;
-    }
-
-    /**
-     * @return bool
-     *
-     * Determines if the player is a pe player.
-     */
-    public function isPe(): bool
-    {
-
-        $deviceOS = $this->getDeviceOS();
-
-        $invalidDevices = [
-            self::PS4 => true,
-            self::XBOX => true,
-            self::WINDOWS_10 => true,
-            self::LINUX => true,
-        ];
-
-        if (isset($invalidDevices[$deviceOS])) {
-            return false;
-        }
-
-        return $deviceOS === self::TOUCH;
-    }
-
-
-    /**
-     * @param string|AbstractKit $kit
-     */
-    public function setCurrentKit($kit): void
-    {
-        $this->currentKit = ($kit instanceof AbstractKit) ? $kit->getLocalizedName() : strval($kit);
-    }
-
-    /**
-     * Clears the kit.
-     */
-    public function clearKit(): void
-    {
-        $this->currentKit = null;
-    }
-
-    /**
-     * @return bool
-     *
-     * Determines if the player has a kit.
-     */
-    public function hasKit(): bool
-    {
-        return $this->currentKit !== null;
-    }
-
-    public function attack(EntityDamageEvent $source): void
-    {
-
-        // $time = microtime(true);
-
-        $kits = MineceitCore::getKits();
-        $duelHandler = MineceitCore::getDuelHandler();
-
-        // To ensure that players don't have unlimited attack time
-        if ($this->attackTime > 0 or $this->isCreative()) {
-            $source->setCancelled();
-            return;
-        } elseif ($this->isInArena()) {
-            if ($this->currentArena->isWithinProtection($this)) {
-                $source->setCancelled();
-                return;
-            }
-        }
-
-        if ($this->isInDuel()) {
-
-            $duel = $duelHandler->getDuel($this);
-
-            if ($duel->cantDamagePlayers()) {
-
-                $cancel = true;
-
-                if ($duel->isSpleef() and $source instanceof EntityDamageByChildEntityEvent) {
-                    $child = $source->getChild();
-                    if ($child instanceof Snowball) {
-                        $cancel = false;
-                    }
-                }
-
-                if ($cancel) {
-                    $source->setCancelled();
-                    return;
-                }
-            }
-        }
-
-        parent::attack($source);
-
-        if ($source->isCancelled()) return;
-
-        $speed = $source->getAttackCooldown();
-
-        if ($this->currentKit !== null and $kits->isKit($this->currentKit)) {
-
-            $kit = $kits->getKit($this->currentKit);
-
-            if ($source instanceof EntityDamageByEntityEvent) {
-
-                $damager = $source->getDamager();
-
-                if ($damager instanceof MineceitPlayer) {
-
-                    if ($damager->hasKit()) $speed = $kit->getSpeed();
-
-                    $this->attackTime = $speed;
-
-                    if ($damager->isInArena() and $source->getCause() !== EntityDamageEvent::CAUSE_SUICIDE) {
-                        $damager->setInCombat(true);
-                    } elseif ($damager->isInDuel() and $this->isInDuel()) {
-                        $duel = $duelHandler->getDuel($this);
-                        $duel->addHitTo($damager, $source->getFinalDamage());
-                    }
-                }
-            }
-        }
-
-        // Prevents the players from getting the death screen since they are bugged as of 1.13.
-        $health = $this->getHealth();
-
-        if ($health <= 1.0) {
-
-            $source->setCancelled();
-
-            $core = MineceitCore::getInstance();
-
-            $this->setInSpectatorMode();
-
-            $this->onDeath();
-
-            $this->clearInventory();
-
-            $this->setHealth($this->getMaxHealth());
-
-            if ($this->isInEvent()) {
-                return;
-            }
-
-            $task = new OnDeathTask($this);
-
-            $core->getScheduler()->scheduleDelayedTask($task, 10);
-        } elseif ($this->isInArena()) {
-            $this->setInCombat(true);
-        }
-    }
-
-
-    public function knockBack(Entity $attacker, float $damage, float $x, float $z, float $base = 0.4): void
-    {
-
-        $xzKb = $base;
-        $yKb = $base;
-
-        $kits = MineceitCore::getKits();
-
-        if ($this->currentKit !== null and $kits->isKit($this->currentKit)) {
-            $kit = $kits->getKit($this->currentKit);
-            if ($attacker instanceof MineceitPlayer and $attacker->hasKit()) {
-                $xzKb = $kit->getXKb();
-                $yKb = $kit->getYKb();
-            }
-        }
-
-
-        $f = sqrt($x * $x + $z * $z);
-
-        if ($f <= 0) return;
-
-        if (mt_rand() / mt_getrandmax() > $this->getAttributeMap()->getAttribute(Attribute::KNOCKBACK_RESISTANCE)->getValue()) {
-            $f = 1 / $f;
-
-            $motion = clone $this->motion;
-
-            $motion->x /= 2;
-            $motion->y /= 2;
-            $motion->z /= 2;
-            $motion->x += $x * $f * $xzKb;
-            $motion->y += $yKb;
-            $motion->z += $z * $f * $xzKb;
-
-            if ($motion->y > $yKb) {
-                $motion->y = $yKb;
-            }
-
-            $this->setMotion($motion);
-        }
-    }
-
-    /**
-     * @param Item $item
-     * @param bool $animate
-     * @return bool
-     *
-     * Player uses the fishing rod.
-     */
-    public function useRod(Item $item, bool $animate = false): bool
-    {
-
-        $exec = !$this->spectatorMode and !$this->isImmobile();
-
-        $duelHandler = MineceitCore::getDuelHandler();
-        $duel = $duelHandler->getDuel($this);
-
-        if ($exec and $duel !== null)
-            $exec = !$duel->isCountingDown();
-
-        if ($exec) {
-
-            $damage = false;
-
-            $players = $this->getLevel()->getPlayers();
-
-            if ($this->isFishing()) {
-                $this->stopFishing();
-                $damage = true;
-            } else {
-                $this->startFishing();
-            }
-
-            if ($animate) {
-                $pkt = new AnimatePacket();
-                $pkt->action = AnimatePacket::ACTION_SWING_ARM;
-                $pkt->entityRuntimeId = $this->getId();
-                $this->getServer()->broadcastPacket($players, $pkt);
-            }
-
-            if ($damage and !$this->isCreative()) {
-                $inv = $this->getInventory();
-                $newItem = Item::get($item->getId(), $item->getDamage() + 1);
-                if ($item->getDamage() > 65)
-                    $newItem = Item::get(0);
-                $inv->setItemInHand($newItem);
-            }
-
-            if ($duel !== null)
-                $duel->setFishingFor($this, $this->isFishing());
-        }
-
-        return $exec;
-    }
-
-    /**
-     * @param int $seconds
-     *
-     * Sets the player on fire.
-     */
-    public function setOnFire(int $seconds): void
-    {
-        parent::setOnFire($seconds);
-
-        if ($this->isInDuel()) {
-            $duel = MineceitCore::getDuelHandler()->getDuel($this);
-            $duel->setOnFire($this, $seconds);
-        }
-    }
-
-    /**
-     * Extinguishes the player.
-     */
-    public function extinguish(): void
-    {
-        parent::extinguish();
-        if ($this->isInDuel()) {
-            $duel = MineceitCore::getDuelHandler()->getDuel($this);
-            $duel->setOnFire($this, false);
-        }
-    }
-
-    /**
-     * @param EnderPearl $item
-     * @param bool $animate
-     * @return bool
-     *
-     * Throws the enderpearl.
-     */
-    public function throwPearl(EnderPearl $item, bool $animate = false): bool
-    {
-
-        $exec = !$this->spectatorMode and !$this->isImmobile();
-
-        $duelHandler = MineceitCore::getDuelHandler();
-        $duel = $duelHandler->getDuel($this);
-
-        if ($exec and $duel !== null) {
-            $exec = !$duel->isCountingDown();
-        }
-
-        if ($exec) {
-
-            $players = $this->getLevel()->getPlayers();
-
-            $item->onClickAir($this, $this->getDirectionVector());
-
-            $this->setThrowPearl(false);
-
-            if ($animate === true) {
-                $pkt = new AnimatePacket();
-                $pkt->action = AnimatePacket::ACTION_SWING_ARM;
-                $pkt->entityRuntimeId = $this->getId();
-                $this->getServer()->broadcastPacket($players, $pkt);
-            }
-
-            if (!$this->isCreative()) {
-                $inv = $this->getInventory();
-                $index = $inv->getHeldItemIndex();
-                $count = $item->getCount();
-                if ($count > 1) $inv->setItem($index, Item::get($item->getId(), $item->getDamage(), $count));
-                else $inv->setItem($index, Item::get(0));
-            }
-        }
-
-        if ($exec and $duel !== null)
-            $duel->setThrowFor($this, $item);
-
-        return $exec;
-    }
-
-    /**
-     * @param SplashPotion $item
-     * @param bool $animate
-     * @return bool
-     *
-     * Throws the potion.
-     */
-    public function throwPotion(SplashPotion $item, bool $animate = false): bool
-    {
-
-        $exec = !$this->spectatorMode and !$this->isImmobile();
-
-        $duelHandler = MineceitCore::getDuelHandler();
-        $duel = $duelHandler->getDuel($this);
-
-        if ($exec and $duel !== null)
-            $exec = !$duel->isCountingDown();
-
-        if ($exec) {
-
-            $players = $this->getLevel()->getPlayers();
-
-            $item->onClickAir($this, $this->getDirectionVector());
-
-            if ($animate) {
-                $pkt = new AnimatePacket();
-                $pkt->action = AnimatePacket::ACTION_SWING_ARM;
-                $pkt->entityRuntimeId = $this->getId();
-                $this->getServer()->broadcastPacket($players, $pkt);
-            }
-
-            if (!$this->isCreative()) {
-                $inv = $this->getInventory();
-                $inv->setItem($inv->getHeldItemIndex(), Item::get(0));
-            }
-        }
-
-        if ($exec and $duel !== null)
-            $duel->setThrowFor($this, $item);
-
-        return $exec;
-    }
-
-    /**
-     * Starts fishing.
-     */
-    private function startFishing(): void
-    {
-
-        $player = $this->getPlayer();
-
-        if ($player !== null and !$this->isFishing()) {
-
-            $tag = Entity::createBaseNBT($player->add(0.0, $player->getEyeHeight(), 0.0), $player->getDirectionVector(), floatval($player->yaw), floatval($player->pitch));
-            $rod = Entity::createEntity('FishingHook', $player->getLevel(), $tag, $player);
-
-            if ($rod !== null) {
-                $x = -sin(deg2rad($player->yaw)) * cos(deg2rad($player->pitch));
-                $y = -sin(deg2rad($player->pitch));
-                $z = cos(deg2rad($player->yaw)) * cos(deg2rad($player->pitch));
-                $rod->setMotion(new Vector3($x, $y, $z));
-            }
-
-            //$item->count--;
-            if (!is_null($rod) and $rod instanceof FishingHook) {
-                $ev = new ProjectileLaunchEvent($rod);
-                $ev->call();
-                if ($ev->isCancelled()) {
-                    $rod->flagForDespawn();
-                } else {
-                    $rod->spawnToAll();
-                    $this->fishing = $rod;
-                    $player->getLevel()->broadcastLevelSoundEvent($player, LevelSoundEventPacket::SOUND_THROW, 0, EntityIds::PLAYER);
-                }
-            }
-        }
-    }
-
-    /**
-     * @param bool $click
-     * @param bool $killEntity
-     */
-    public function stopFishing(bool $click = true, bool $killEntity = true): void
-    {
-
-        if ($this->isFishing() and $this->fishing instanceof FishingHook) {
-            $rod = $this->fishing;
-            if ($click === true) {
-                $rod->reelLine();
-            } elseif ($rod !== null) {
-                if (!$rod->isClosed() and $killEntity === true) {
-                    $rod->kill();
-                    $rod->close();
-                }
-            }
-        }
-
-        $this->fishing = null;
-    }
-
-    /**
-     * @return bool
-     */
-    public function isFishing(): bool
-    {
-        return $this->fishing !== null;
-    }
-
-    /**
-     * Updates the tag of the player.
-     */
-    public function updateNameTag(): void
-    {
-
-        switch ($this->tagType) {
-            case self::TAG_NORMAL:
-                if ($this->frozen)
-                    $this->setFrozenNameTag();
-                else $this->setSpawnNameTag();
-                break;
-            case self::TAG_DUELS:
-                $this->setDuelNameTag();
-                break;
-        }
-    }
-
-    /**
-     * Sets the spawn name tag.
-     */
-    public function setSpawnNameTag(): void
-    {
-
-        $rankHandler = MineceitCore::getRankHandler();
-        $rankFormat = $rankHandler->formatRanksForTag($this);
-        $health = (int)$this->getHealth();
-        $format = TextFormat::DARK_GRAY . '[' . TextFormat::RED . $health . TextFormat::DARK_GRAY . ']';
-        $name = $rankFormat . " $format\n" . TextFormat::WHITE . $this->getDeviceOS(true) . TextFormat::GRAY . ' | ' . TextFormat::WHITE . $this->getInput(true);
-        $this->setNameTag($name);
-        $this->tagType = self::TAG_NORMAL;
-    }
-
-    /**
-     * Sets the duels name tag.
-     */
-    public function setDuelNameTag(): void
-    {
-
-        $health = (int)$this->getHealth();
-        $healthStr = TextFormat::DARK_GRAY . '[' . TextFormat::RED . $health . TextFormat::DARK_GRAY . ']';
-        $tag = TextFormat::GREEN . $this->getDisplayName() . ' ' . $healthStr;
-        $this->setNameTag($tag);
-        $this->tagType = self::TAG_DUELS;
-    }
-
-    public function setFrozenNameTag(): void
-    {
-
-        $rankHandler = MineceitCore::getRankHandler();
-        $rankFormat = $rankHandler->formatRanksForTag($this);
-        $health = (int)$this->getHealth();
-        $format = TextFormat::DARK_GRAY . '[' . TextFormat::RED . $health . TextFormat::DARK_GRAY . ']';
-        $name = $rankFormat . " $format\n" . TextFormat::DARK_GRAY . '[' . TextFormat::GOLD . 'Frozen' . TextFormat::GOLD . TextFormat::DARK_GRAY . ']' . TextFormat::WHITE . ' ' . $this->getDeviceOS(true) . TextFormat::GRAY . ' | ' . TextFormat::WHITE . $this->getInput(true);
-        $this->setNameTag($name);
-    }
-
-    /**
-     * @param float $amount
-     *
-     * Sets the health of the player while updating the nametags.
-     */
-    public function setHealth(float $amount): void
-    {
-        parent::setHealth($amount);
-        if ($this->tagType === self::TAG_DUELS) {
-            $this->setDuelNameTag();
-        } else {
-            $this->setSpawnNameTag();
-        }
-    }
-
-    /**
-     * @param Form $form
-     * @param array $addedContent
-     *
-     * Sends the form to a player.
-     */
-    public function sendFormWindow(Form $form, array $addedContent = []): void
-    {
-        if (!$this->lookingAtForm) {
-
-            $formToJSON = $form->jsonSerialize();
-
-            $content = [];
-
-            if (isset($formToJSON['content']) and is_array($formToJSON['content'])) {
-                $content = $formToJSON['content'];
-            } elseif (isset($formToJSON['buttons']) and is_array($formToJSON['buttons'])) {
-                $content = $formToJSON['buttons'];
-            }
-
-            if (!empty($addedContent)) {
-                $content = array_replace($content, $addedContent);
-            }
-
-            $this->formData = $content;
-
-            $this->lookingAtForm = true;
-
-            $this->sendForm($form);
-        }
-    }
-
-    /**
-     * @return array
-     *
-     * Officially removes the form data from the player.
-     */
-    public function removeFormData(): array
-    {
-
-        $data = $this->formData;
-        $this->formData = [];
-
-        return $data;
-    }
-
-
-    /**
-     * @param int $formId
-     * @param mixed $responseData
-     *
-     * @return bool
-     */
-    public function onFormSubmit(int $formId, $responseData): bool
-    {
-
-        $this->lookingAtForm = false;
-
-        $result = parent::onFormSubmit($formId, $responseData);
-        if (isset($this->forms[$formId])) {
-            unset($this->forms[$formId]);
-        }
-
-        return $result;
-    }
-
-    /**
-     * @return bool
-     */
-    public function isInHub(): bool
-    {
-
-        $level = $this->level;
-        $defaultLevel = $this->getServer()->getDefaultLevel();
-        $notInArena = $this->currentArena === null;
-
-        return $defaultLevel !== null ? $level->getName() === $defaultLevel->getName() and $notInArena : $notInArena;
-    }
-
-    /**
-     * @return bool
-     */
-    public function isInArena(): bool
-    {
-        return $this->currentArena !== null;
-    }
-
-    /**
-     * @return FFAArena|null
-     */
-    public function getArena()
-    {
-        return $this->currentArena;
-    }
-
-    /**
-     * @param string|FFAArena $arena
-     * @return bool
-     *
-     * Teleports the player to the ffa arena.
-     */
-    public function teleportToFFAArena($arena): bool
-    {
-
-        if ($this->isFrozen() or $this->isInEvent()) {
-            return false;
-        }
-
-        $arenaHandler = MineceitCore::getArenas();
-        $arena = ($arena instanceof FFAArena) ? $arena : $arenaHandler->getArena($arena);
-
-        if ($arena !== null and $arena instanceof FFAArena and $arena->isOpen()) {
-
-            $this->setPlayerFlying(false);
-
-            $this->currentArena = $arena;
-
-            $inventory = $this->getInventory();
-            $armorInv = $this->getArmorInventory();
-
-            $inventory->clearAll();
-            $armorInv->clearAll();
-
-            $arena->teleportPlayer($this);
-
-            if ($this->scoreboardType !== Scoreboard::SCOREBOARD_NONE)
-                $this->setScoreboard(Scoreboard::SCOREBOARD_FFA);
-
-            if (!$this->displayPlayer) {
-                $this->showPlayers(false);
-            }
-
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * Generally updates the player within the task.
-     */
-    public function update(): void
-    {
-
-        if (!$this->throwPearl) {
-            $this->removeSecInThrow();
-            if ($this->secsEnderpearl <= 0) $this->setThrowPearl();
-        }
-
-        if ($this->combat) {
-            $this->secsInCombat--;
-            if ($this->secsInCombat <= 0)
-                $this->setInCombat(false);
-        }
-
-        if ($this->spam > 0) {
-            $this->spam--;
-        }
-
-        if ($this->tellSpam > 0)
-            $this->tellSpam--;
-
-
-        if ($this->previousLimitedFeat !== $this->hasLimitedFeatures()) {
-            if (!$this->hasLimitedFeatures()) {
-                // TODO SEND MESSAGE
-            }
-        }
-
-        if ($this->currentSecond % 5 === 0) {
-            $this->doUpdatePing();
-        }
-
-        $this->previousLimitedFeat = $this->hasLimitedFeatures();
-        $this->currentSecond++;
-    }
-
-
-    /**
-     * @param int $currentTick
-     *
-     * Updates the cps trackers.
-     */
-    public function updateCPSTrackers(int $currentTick): void
-    {
-
-        if ($currentTick !== 0 and MineceitCore::AUTOCLICK_DETECTOR_ENABLED) {
-
-            if ($this->clickSpeedCheck !== null) {
-
-                $violations = $this->clickSpeedCheck->getViolationCount();
-
-                if ($currentTick % 20 === 0) {
-
-                    if ($violations > AbstractCheck::MAX_VIOLATIONS_BAN_CLICK_SPEED and !$this->hasTrialModPermissions()) {
-                        MineceitUtil::autoBan($this, "Autoclick Detector");
-                        // MineceitUtil::broadcastMessage("Should ban " . $this->getName() . " for autoclicking.");
-                        return;
-                    }
-                }
-
-                if ($currentTick % 60 === 0) {
-                    $this->clickSpeedCheck->decreaseViolation();
-                }
-
-                if ($currentTick % 10 === 0 and $violations > AbstractCheck::MAX_VIOLATIONS_ALERT) {
-                    $this->clickSpeedCheck->sendAlert();
-                }
-            }
-
-            if ($this->diggingCheck !== null) {
-
-                $violations = $this->diggingCheck->getViolationCount();
-
-                if ($currentTick % 20 === 0) {
-
-                    if ($violations > AbstractCheck::MAX_VIOLATIONS_BAN_DIGGING and !$this->hasTrialModPermissions()) {
-                        MineceitUtil::autoBan($this, "Autoclick Detector");
-                        // MineceitUtil::broadcastMessage("Should ban " . $this->getName() . " for autoclicking.");
-                        return;
-                    }
-
-                    $this->consistencyCheck->decreaseViolation();
-                }
-
-                if ($currentTick % 10 === 0) {
-                    if ($violations > AbstractCheck::MAX_VIOLATIONS_ALERT) {
-                        $this->diggingCheck->sendAlert();
-                    }
-                    $this->diggingCheck->decreaseViolation();
-                }
-            }
-
-            if ($this->consistencyCheck !== null) {
-
-                $violations = $this->consistencyCheck->getViolationCount();
-
-                if ($currentTick % 20 === 0) {
-
-                    if ($violations > AbstractCheck::MAX_VIOLATIONS_BAN_CONSISTENCY and !$this->hasTrialModPermissions()) {
-                        MineceitUtil::autoBan($this, "Autoclick Detector");
-                        // MineceitUtil::broadcastMessage("Should ban " . $this->getName() . " for autoclicking.");
-                        return;
-                    }
-
-                    // $this->consistencyCheck->decreaseViolation();
-                }
-
-                if ($currentTick % 10 === 0 and $violations > AbstractCheck::MAX_VIOLATIONS_ALERT) {
-                    $this->consistencyCheck->sendAlert();
-                }
-            }
-        }
-    }
-
-
-    /**
-     * Updates the cps of the player.
-     */
-    public function updateCps(): void
-    {
-
-        $clicksInfo = $this->getClicksInfo();
-        $update = $clicksInfo->updateCPS();
-        if (!$update) {
-            return;
-        }
-
-        $cps = $clicksInfo->getCps();
-
-        $color = MineceitUtil::getThemeColor();
-
-        $yourLang = $this->getLanguage();
-
-        $duel = MineceitCore::getDuelHandler()->getDuel($this);
-
-        if ($this->scoreboardType === Scoreboard::SCOREBOARD_FFA) {
-            $this->updateLineOfScoreboard(4, TextFormat::WHITE . " CPS: " . $color . $cps);
-        } elseif ($duel !== null) {
-
-            $duel = MineceitCore::getDuelHandler()->getDuel($this);
-
-            if (($opponent = $duel->getOpponent($this)) !== null) {
-
-                $theirLang = $opponent->getLanguage();
-
-                $yourCps = TextFormat::WHITE . ' ' . $yourLang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_CPS) . ': ' . $color . $cps . ' ';
-
-                if ($yourLang->getLocale() === Language::ARABIC)
-                    $yourCps = ' ' . $color . $cps . TextFormat::WHITE . ' :' . $yourLang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_CPS) . ' ';
-
-                $theirCps = TextFormat::WHITE . ' ' . $theirLang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_CPS) . ': ' . $color . $cps . ' ';
-
-                if ($theirLang->getLocale() === Language::ARABIC)
-                    $theirCps = ' ' . $color . $cps . TextFormat::WHITE . ' :' . $theirLang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_CPS) . ' ';
-
-                $this->updateLineOfScoreboard(7, $yourCps);
-                $opponent->updateLineOfScoreboard(10, $theirCps);
-            }
-        } elseif ($this->isInEventDuel()) {
-
-            $event = MineceitCore::getEventManager()->getEventFromPlayer($this);
-            $eventDuel = $event->getCurrentDuel();
-
-            $opponent = $eventDuel->getOpponent($this);
-
-            if ($eventDuel->getStatus() < 2 and $opponent !== null) {
-
-                $theirLang = $opponent->getLanguage();
-
-                $yourCps = TextFormat::WHITE . ' ' . $yourLang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_CPS) . ': ' . $color . $cps . ' ';
-
-                if ($yourLang->getLocale() === Language::ARABIC)
-                    $yourCps = ' ' . $color . $cps . TextFormat::WHITE . ' :' . $yourLang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_CPS) . ' ';
-
-                $theirCps = TextFormat::WHITE . ' ' . $theirLang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_CPS) . ': ' . $color . $cps . ' ';
-
-                if ($theirLang->getLocale() === Language::ARABIC)
-                    $theirCps = ' ' . $color . $cps . TextFormat::WHITE . ' :' . $theirLang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_CPS) . ' ';
-
-                $this->updateLineOfScoreboard(7, $yourCps);
-                $opponent->updateLineOfScoreboard(10, $theirCps);
-            }
-        }
-    }
-
-    /**
-     * @param bool $clickedBlock
-     * @param Position|null $posClicked
-     *
-     * Adds the cps to the player.
-     */
-    public function addCps(bool $clickedBlock, Position $posClicked = null): void
-    {
-
-        if (MineceitCore::AUTOCLICK_DETECTOR_ENABLED) {
-
-            if ($this->clickSpeedCheck !== null) {
-                $this->clickSpeedCheck->addClick();
-            }
-
-            if ($this->consistencyCheck !== null) {
-                $this->consistencyCheck->addClick();
-            }
-        }
-
-        if ($clickedBlock) {
-            if ($this->lastAction === PlayerActionPacket::ACTION_ABORT_BREAK && $this->currentAction === PlayerActionPacket::ACTION_START_BREAK) {
-                $difference = $this->currentActionTime - $this->lastActionTime;
-                var_dump($difference);
-                if ($difference > 5 && $this->clicksInfo !== null) {
-                    $this->clicksInfo->addClick($clickedBlock);
-                    if ($this->diggingCheck !== null and $posClicked !== null) {
-                        $this->diggingCheck->checkBlocks($posClicked);
-                    }
-                }
-            }
-        } else {
-            $this->clicksInfo->addClick($clickedBlock);
-        }
-    }
-
-    /**
-     * @return ClicksInfo
-     *
-     * Gets the clicks info of the player.
-     */
-    public function getClicksInfo(): ClicksInfo
-    {
-        if ($this->clicksInfo === null) {
-            $this->clicksInfo = new ClicksInfo($this);
-        }
-
-        return $this->clicksInfo;
-    }
-
-    /**
-     * Sets the player in normal spam.
-     */
-    public function setInSpam(): void
-    {
-        $this->spam = 5;
-    }
-
-    /**
-     * Sets the player in tell spam.
-     */
-    public function setInTellSpam(): void
-    {
-        $this->tellSpam = 5;
-    }
-
-    /**
-     *
-     * @param bool $command
-     *
-     * @return bool
-     */
-    public function canChat(bool $command = false): bool
-    {
-
-        $spam = $command ? $this->tellSpam : $this->spam;
-
-        if ($spam > 0 or $this->isMuted()) {
-
-            if (!$this->isOp()) {
-
-                $lang = $this->getLanguage();
-
-                $msg = null;
-
-                if ($spam > 0) {
-                    $msg = $lang->getMessage(Language::NO_SPAM);
-                } elseif ($this->isMuted()) {
-                    $this->sendPopup($lang->getMessage(Language::MUTED));
-                }
-
-                if ($msg !== null) {
-                    $this->sendMessage(MineceitUtil::getPrefix() . " " . TextFormat::RESET . $msg);
-                }
-
-                return false;
-            }
-
-            return true;
-        }
-
-        return true;
-    }
-
-    /**
-     * @param bool $throw
-     * @param bool $message
-     */
-    public function setThrowPearl(bool $throw = true, bool $message = true): void
-    {
-
-        $language = $this->getLanguage();
-
-        if (!$throw) {
-
-            $this->secsEnderpearl = 15;
-            $this->setXpProgress(1);
-            $this->setXpLevel(15);
-
-            $msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $language->generalMessage(Language::SET_IN_ENDERPEARLCOOLDOWN);
-
-            if ($message and $this->throwPearl) {
-                $this->sendMessage($msg);
-            }
-
-        } else {
-
-            $this->secsEnderpearl = 0;
-            $this->setXpProgress(0);
-            $this->setXpLevel(0);
-
-            $msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $language->generalMessage(Language::REMOVE_FROM_ENDERPEARLCOOLDOWN);
-
-            if ($message and !$this->throwPearl) {
-                $this->sendMessage($msg);
-            }
-        }
-
-        $this->throwPearl = $throw;
-    }
-
-    /**
-     * @return bool
-     */
-    public function canThrowPearl(): bool
-    {
-        return $this->throwPearl;
-    }
-
-    /**
-     * Updates the seconds in enderpearl cooldown.
-     */
-    private function removeSecInThrow(): void
-    {
-        $this->secsEnderpearl--;
-        $maxSecs = 15;
-        $sec = $this->secsEnderpearl;
-        if ($sec < 0) $sec = 0;
-        $percent = floatval($this->secsEnderpearl / $maxSecs);
-        if ($percent < 0) $percent = 0;
-        $p = $this->getPlayer();
-        $p->setXpLevel($sec);
-        $p->setXpProgress($percent);
-    }
-
-    /**
-     * @param bool $combat
-     * @param bool $sendMessage
-     */
-    public function setInCombat(bool $combat = true, bool $sendMessage = true): void
-    {
-
-        $language = $this->getLanguage();
-
-        if ($combat) {
-            $this->secsInCombat = 10;
-            $msg = MineceitUtil::getPrefix() . ' ' . $language->generalMessage(Language::SET_IN_COMBAT);
-            if (!$this->combat and $sendMessage) {
-                $this->sendMessage($msg);
-            }
-
-        } else {
-            $this->secsInCombat = 0;
-            $msg = MineceitUtil::getPrefix() . ' ' . $language->generalMessage(Language::REMOVE_FROM_COMBAT);
-            if ($this->combat and $sendMessage) {
-                $this->sendMessage($msg);
-            }
-        }
-
-        $this->combat = $combat;
-    }
-
-    /**
-     * @return bool
-     */
-    public function isInCombat(): bool
-    {
-        return $this->combat;
-    }
-
-    /**
-     * @param bool $clearInv
-     * @param bool $teleportSpawn
-     */
-    public function reset(bool $clearInv = false, bool $teleportSpawn = false): void
-    {
-
-        $this->currentArena = null;
-
-        if ($this->isSpectator()) {
-            $this->setInSpectatorMode(false);
-        }
-
-        if ($this->displayPlayer === false)
-            $this->hidePlayers();
-        else $this->showPlayers();
-
-        $this->setFood($this->getMaxFood());
-        $this->setSaturation($this->getMaxSaturation());
-
-        $this->setHealth($this->getMaxHealth());
-
-        $this->setXpLevel(0);
-        $this->setXpProgress(0);
-
-        $this->setGamemode(0);
-
-        $this->clearKit();
-
-        $this->extinguish();
-
-        $this->removeAllEffects();
-
-        if ($this->isImmobile()) {
-            $this->setImmobile(false);
-        }
-
-        if ($this->combat) {
-            $this->setInCombat(false, false);
-        }
-
-        if ($this->throwPearl) {
-            $this->setThrowPearl(true);
-        }
-
-        if ($clearInv) {
-            $this->clearInventory();
-        }
-
-        if ($teleportSpawn) {
-            $level = $this->getServer()->getDefaultLevel();
-            if ($level !== null) {
-                $pos = $level->getSpawnLocation();
-                $this->teleport($pos);
-            }
-            $this->setAllowFlight($this->canFlyInLobby());
-        }
-    }
-
-    /**A
-     * @return float
-     */
-    public function getMaxSaturation(): float
-    {
-        return $this->attributeMap->getAttribute(Attribute::SATURATION)->getMaxValue();
-    }
-
-    public function respawn(): void
-    {
-
-        parent::respawn();
-
-        $this->currentArena = null;
-
-        if ($this->isSpectator()) {
-            $this->setInSpectatorMode(false);
-        }
-
-        if ($this->isFlying()) {
-            $this->setFlying(false);
-        }
-
-        if ($this->displayPlayer) {
-            $this->showPlayers();
-        } else {
-            $this->hidePlayers();
-        }
-
-        // TODO RE ADD DISPLAYING PLAYERS EVENTUALLY
-
-        /* $players = $this->getLevel()->getPlayers();
-
-        foreach($players as $player) {
-            if($player instanceof MineceitPlayer) {
-                $display = $player->isDisplayPlayers();
-                if($display === false)
-                    $player->displayPlayers(false);
-            }
-        } */
-
-        if ($this->scoreboardType !== Scoreboard::SCOREBOARD_NONE) {
-            $this->setScoreboard(Scoreboard::SCOREBOARD_SPAWN);
-        }
-
-        $this->setInCombat(false, false);
-        $this->setThrowPearl(true);
-
-        MineceitCore::getItemHandler()->spawnHubItems($this, true);
-
-        $this->dead = false;
-
-        $this->setAllowFlight($this->canFlyInLobby());
-    }
-
-    /**
-     * @param int $gm
-     * @param bool $client
-     * @return bool
-     */
-    public function setGamemode(int $gm, bool $client = false): bool
-    {
-
-        $result = parent::setGamemode($gm, $client);
-
-        if ($gm === 3) {
-            $this->spectatorMode = $result;
-        } else $this->spectatorMode = false;
-        return $result;
-    }
-
-    /**
-     * @param bool $spec
-     * @param bool $forDuels
-     */
-    public function setInSpectatorMode(bool $spec = true, bool $forDuels = false): void
-    {
-
-        if ($spec === true) {
-
-            if (!$forDuels) $this->setGamemode(3);
-            else {
-                // canHitPlayer = false
-                $this->setGamemode(0);
-                $this->setInvisible(true);
-                $this->setPlayerFlying(true);
-                $this->spectatorMode = true;
-            }
-        } else {
-            // canHitPlayer = true
-            $this->setGamemode(0);
-            $this->setInvisible(false);
-            $this->setPlayerFlying(false);
-            $this->spectatorMode = false;
-        }
-    }
-
-    /**
-     * @return bool
-     */
-    public function isPlayerFlying(): bool
-    {
-        return $this->getAllowFlight();
-    }
-
-    /**
-     * @param bool $res
-     */
-    public function setPlayerFlying(bool $res = true): void
-    {
-        $this->setAllowFlight($res);
-        $this->setFlying($res);
-    }
-
-
-    /**
-     * @return bool
-     *
-     * Determines whether the player can fly in the lobby.
-     */
-    public function canFlyInLobby(): bool
-    {
-
-        foreach ($this->ranks as $rank) {
-            if ($rank->canFly()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * @return bool
-     */
-    public function isSpectator(): bool
-    {
-        return parent::isSpectator() or $this->spectatorMode;
-    }
-
-    /**
-     * @return bool
-     */
-    public function isADuelSpec(): bool
-    {
-        $duelHandler = MineceitCore::getDuelHandler();
-        $duel = $duelHandler->getDuelFromSpec($this);
-        return $duel !== null;
-    }
-
-    /**
-     * @return bool
-     *
-     * Determines if the player has trial mod permissions.
-     */
-    public function hasTrialModPermissions(): bool
-    {
-        foreach ($this->ranks as $rank) {
-            if ($rank->getPermission() !== Rank::PERMISSION_NONE) {
-                return true;
-            }
-        }
-
-        return $this->isOp();
-    }
-
-
-    /**
-     * @return bool
-     *
-     * Determines if the player has mod permissions.
-     */
-    public function hasModPermissions(): bool
-    {
-
-        foreach ($this->ranks as $rank) {
-            if ($rank->getPermission() === Rank::PERMISSION_MOD or $rank->getPermission() === Rank::PERMISSION_ADMIN or $rank->getPermission() === Rank::PERMISSION_OWNER) {
-                return true;
-            }
-        }
-
-        return $this->isOp();
-    }
-
-
-    /**
-     * @return bool
-     *
-     * Determines if the player has admin permissions.
-     */
-    public function hasAdminPermissions(): bool
-    {
-
-        foreach ($this->ranks as $rank) {
-            if ($rank->getPermission() === Rank::PERMISSION_ADMIN or $rank->getPermission() === Rank::PERMISSION_OWNER) {
-                return true;
-            }
-        }
-
-        return $this->isOp();
-    }
-
-
-    /**
-     * @return bool
-     *
-     * Determines if the player has owner permissions.
-     */
-    public function hasOwnerPermissions(): bool
-    {
-
-        foreach ($this->ranks as $rank) {
-            if ($rank->getPermission() === Rank::PERMISSION_OWNER) {
-                return true;
-            }
-        }
-
-        return $this->isOp();
-    }
-
-
-    /**
-     * @return bool
-     *
-     * Determines if the player has the permission to fly in the lobby.
-     */
-    public function hasFlightPermission(): bool
-    {
-
-        foreach ($this->ranks as $rank) {
-            if ($rank->canFly()) {
-                return true;
-            }
-        }
-
-        return $this->isOp();
-    }
-
-
-    /**
-     * Occurs when players die.
-     */
-    public function onDeath(): void
-    {
-
-        if (!$this->dead) {
-
-            $this->dead = true;
-
-            $this->setInCombat(false, false);
-            $this->setThrowPearl(true, false);
-
-            $cause = $this->getLastDamageCause();
-
-            $addDeath = false;
-
-            $duel = MineceitCore::getDuelHandler()->getDuel($this);
-            $event = MineceitCore::getEventManager()->getEventFromPlayer($this);
-
-            // MineceitUtil::spawnLightningBolt($this);
-
-            $skip = false;
-
-            if ($cause !== null) {
-
-                $causeAction = $cause->getCause();
-
-                if ($causeAction === EntityDamageEvent::CAUSE_SUICIDE or $causeAction === EntityDamageEvent::CAUSE_VOID) {
-
-                    if ($duel !== null) {
-                        $duel->setEnded();
-                        $skip = true;
-                    } elseif ($this->isInEventDuel()) {
-                        $eventDuel = $event->getCurrentDuel();
-                        $eventDuel->setResults();
-                        $skip = true;
-                    }
-                }
-
-                if (!$skip) {
-
-                    $duelWinner = null;
-
-                    if ($cause instanceof EntityDamageByEntityEvent) {
-
-                        $killer = $cause->getDamager();
-
-                        if ($killer !== null and $killer instanceof MineceitPlayer) {
-
-                            if ($this->isInArena()) {
-
-                                $killer->addKill();
-                                $killer->setInCombat(false, false);
-                                $addDeath = true;
-
-                            } elseif ($duel !== null) {
-                                $killer = $killer->getPlayer();
-                                if ($duel->isPlayer($killer)) {
-                                    $duelWinner = $killer;
-                                }
-                            } elseif ($this->isInEventDuel()) {
-                                $eventDuel = $event->getCurrentDuel();
-                                if ($eventDuel->isPlayer($killer)) {
-                                    $duelWinner = $killer;
-                                }
-                            }
-                        }
-                    } elseif ($cause instanceof EntityDamageByChildEntityEvent) {
-
-                        $childOwner = $cause->getDamager();
-
-                        if ($childOwner instanceof MineceitPlayer and $duel !== null and $duel->isPlayer($childOwner)) {
-                            $duelWinner = $childOwner->getPlayer();
-                        }
-                    }
-
-                    if ($duel !== null) {
-                        $duel->setEnded($duelWinner);
-                    } elseif ($this->isInEventDuel()) {
-                        $eventDuel = $event->getCurrentDuel();
-                        $eventDuel->setResults($duelWinner);
-                    }
-                }
-
-                if ($addDeath) {
-                    $this->addDeath();
-                }
-            }
-
-
-            // ------------------------------------------------------------------
-
-
-            //Crafting grid must always be evacuated even if keep-inventory is true. This dumps the contents into the
-            //main inventory and drops the rest on the ground.
-            $this->doCloseInventory();
-
-            $ev = new PlayerDeathEvent($this, []);
-            $ev->call();
-
-            if (!$ev->getKeepInventory()) {
-                foreach ($ev->getDrops() as $item) {
-                    $this->level->dropItem($this, $item);
-                }
-
-                if ($this->inventory !== null) {
-                    $this->inventory->setHeldItemIndex(0);
-                    $this->inventory->clearAll();
-                }
-                if ($this->armorInventory !== null) {
-                    $this->armorInventory->clearAll();
-                }
-            }
-
-            $this->level->dropExperience($this, 0);
-            $this->setXpAndProgress(0, 0.0);
-
-            $msg = $ev->getDeathMessage();
-
-            if ($duel !== null) {
-                $opponent = $duel->getOpponent($this);
-                $duel->broadcastDeathMessage($opponent, $this);
-            } elseif ($msg !== '') {
-                if ($msg instanceof TextContainer)
-                    $this->getServer()->broadcastMessage($msg);
-                else MineceitUtil::broadcastMessage($msg);
-            }
-        }
-    }
-
-    /**
-     * @return bool
-     */
-    public function isInQueue(): bool
-    {
-        $duelHandler = MineceitCore::getDuelHandler();
-        return $duelHandler->isInQueue($this);
-    }
-
-    /**
-     * @return bool
-     *
-     * Determines if the player is in an event.
-     */
-    public function isInEvent(): bool
-    {
-        $eventManager = MineceitCore::getEventManager();
-        return $eventManager->getEventFromPlayer($this) !== null;
-    }
-
-    /**
-     * @return bool
-     *
-     * Determines if the player is in an event duel.
-     */
-    public function isInEventDuel(): bool
-    {
-        if ($this->isInEvent()) {
-            $eventManager = MineceitCore::getEventManager();
-            $event = $eventManager->getEventFromPlayer($this);
-            return ($duel = $event->getCurrentDuel()) !== null and $duel->isPlayer($this);
-        }
-        return false;
-    }
-
-    /**
-     * @param bool $fromLocale
-     *
-     * @return Language|null
-     *
-     * Gets the language of the player either from locale or from the current language.
-     */
-    public function getLanguage(bool $fromLocale = false)
-    {
-
-        $playerHandler = MineceitCore::getPlayerHandler();
-
-        $localeLang = $playerHandler->getLanguage($this->locale);
-
-        if ($fromLocale) {
-            return $localeLang ?? $playerHandler->getLanguage();
-        }
-
-        return $playerHandler->getLanguage($this->currentLang);
-    }
-
-
-    /**
-     * @return bool
-     *
-     * Checks weather the player has a different language from assigned & locale.
-     */
-    public function hasDifferentLocale(): bool
-    {
-
-        $localeLang = $this->getLanguage(true);
-
-        $regularLang = $this->getLanguage();
-
-        return !$localeLang->equals($regularLang);
-    }
-
-    /**
-     * @param string $lang
-     *
-     * Sets the language of the player.
-     */
-    public function setLanguage(string $lang): void
-    {
-        $this->currentLang = $lang;
-    }
-
-    /**
-     * Clears the inventory of the player.
-     */
-    public function clearInventory(): void
-    {
-        $this->getArmorInventory()->clearAll();
-        $this->getInventory()->clearAll();
-    }
-
-    /**
-     * @param bool $frozen
-     * Used for /freeze to not get confused for immobile.
-     */
-    public function setFrozen(bool $frozen = false): void
-    {
-        $this->setImmobile($frozen);
-        $this->frozen = $frozen;
-    }
-
-    /**
-     * @return bool
-     * Used to determine if player is getting ssed or not.
-     */
-    public function isFrozen(): bool
-    {
-        return $this->frozen;
-    }
-
-    /**
-     * @return bool
-     *
-     * Determines if the player is in a duel.
-     */
-    public function isInDuel(): bool
-    {
-        $duelHandler = MineceitCore::getDuelHandler();
-        $duel = $duelHandler->getDuel($this);
-        return $duel !== null;
-    }
-
-    /**
-     * @param string $title
-     * @param string $subtitle
-     * @param int $fadein
-     * @param int $stay
-     * @param int $fadeout
-     *
-     * Sends the player a title.
-     */
-    public function sendTitle(string $title, string $subtitle = '', int $fadein = 0, int $stay = 0, int $fadeout = 0): void
-    {
-
-        $this->setTitleAnimationTimes($fadein, $stay, $fadeout);
-        $this->setSubTitle($subtitle);
-
-        $pkt = new SetTitlePacket();
-        $pkt->text = $title;
-        $pkt->type = SetTitlePacket::TYPE_SET_TITLE;
-        $this->dataPacket($pkt);
-    }
-
-    /**
-     * @param int $fadein
-     * @param int $stay
-     * @param int $fadeout
-     *
-     * Sets the title animation times.
-     */
-    private function setTitleAnimationTimes(int $fadein, int $stay, int $fadeout): void
-    {
-
-        if ($fadein !== 0 and $stay !== 0 and $fadeout !== 0) {
-
-            $pkt = new SetTitlePacket();
-            $pkt->type = SetTitlePacket::TYPE_SET_ANIMATION_TIMES;
-            $pkt->fadeInTime = $fadein;
-            $pkt->fadeOutTime = $fadeout;
-            $pkt->stayTime = $stay;
-            $this->dataPacket($pkt);
-        }
-    }
-
-    /**
-     * @param string $subtitle
-     *
-     * Sets the subtitle.
-     */
-    private function setSubTitle(string $subtitle)
-    {
-        if ($subtitle !== '') {
-            $pkt = new SetTitlePacket();
-            $pkt->type = SetTitlePacket::TYPE_SET_SUBTITLE;
-            $pkt->text = $subtitle;
-            $this->dataPacket($pkt);
-        }
-    }
-
-    /**
-     * @param int $tickDiff
-     *
-     * Does the food tick.
-     */
-    protected function doFoodTick(int $tickDiff = 1): void
-    {
-
-        if ($this->isInHub() or ($this->isInEvent() and !$this->isInEventDuel())) {
-            $this->setFood($this->getMaxFood());
-            $this->setSaturation($this->getMaxSaturation());
-            return;
-        }
-
-        parent::doFoodTick($tickDiff);
-    }
-
-    /**
-     * @param DuelInfo $winner
-     * @param DuelInfo $loser
-     * @param bool $draw
-     */
-    public function addToDuelHistory(DuelInfo $winner, DuelInfo $loser, bool $draw = false): void
-    {
-        $this->duelHistory[] = ['winner' => $winner, 'loser' => $loser, 'draw' => $draw];
-    }
-
-
-    /**
-     * @param DuelReplayInfo $info
-     */
-    public function addReplayDataToDuelHistory(DuelReplayInfo $info): void
-    {
-        $length = count($this->duelHistory);
-        if ($length <= 0) {
-            return;
-        }
-        $lastIndex = $length - 1;
-        $this->duelHistory[$lastIndex]['replay'] = $info;
-    }
-
-    /**
-     * @param int $id
-     * @return array|null
-     */
-    public function getDuelInfo(int $id)
-    {
-
-        $result = null;
-
-        if (isset($this->duelHistory[$id])) {
-            $result = $this->duelHistory[$id];
-        }
-
-        return $result;
-    }
-
-    /**
-     * @return array
-     */
-    public function getDuelHistory(): array
-    {
-        return $this->duelHistory;
-    }
-
-
-    /**
-     * Turns on the coordinates of the client. -> Unused
-     */
-    public function turnOnCoords(): void
-    {
-        $pkt = new GameRulesChangedPacket();
-        $pkt->gameRules = ['showcoordinates' => [1, true]];
-        $this->dataPacket($pkt);
-    }
-
-    /**
-     * @return bool
-     *
-     * Determines if the player is in a party.
-     */
-    public function isInParty(): bool
-    {
-        $partyManager = MineceitCore::getPartyManager();
-        return $partyManager->getPartyFromPlayer($this) !== null;
-    }
-
-    public function jump(): void
-    {
-        parent::jump();
-        if ($this->isInDuel()) {
-            $duel = MineceitCore::getDuelHandler()->getDuel($this);
-            $duel->setJumpFor($this);
-        }
-    }
-
-    public function consumeObject(Consumable $consumable): bool
-    {
-        $drink = $consumable instanceof Potion;
-
-        if ($this->isInDuel()) {
-            $duel = MineceitCore::getDuelHandler()->getDuel($this);
-            $duel->setConsumeFor($this, $drink);
-        }
-
-        return parent::consumeObject($consumable);
-    }
-
-
-    public function addEffect(EffectInstance $effect): bool
-    {
-        if ($this->isInDuel()) {
-            $duel = MineceitCore::getDuelHandler()->getDuel($this);
-            $duel->setEffectFor($this, $effect);
-        }
-        return parent::addEffect($effect);
-    }
-
-
-    /**
-     * @return bool
-     */
-    public function isWatchingReplay(): bool
-    {
-        $replayManager = MineceitCore::getReplayManager();
-        return $replayManager->getReplayFrom($this) !== null;
-    }
-
-    /**
-     * @return ArmorInventory|null
-     */
-    public function getArmorInventory(): ArmorInventory
-    {
-        return $this->armorInventory;
-    }
-
-    /**
-     * @param Item $item
-     * @return bool
-     */
-    public function dropItem(Item $item): bool
-    {
-        if (!$this->spawned or !$this->isAlive()) {
-            return false;
-        }
-
-        if ($item->isNull()) {
-            $this->server->getLogger()->debug($this->getName() . " attempted to drop a null item (" . $item . ")");
-            return true;
-        }
-
-        $motion = $this->getDirectionVector()->multiply(0.4);
-
-        $this->level->dropItem($this->add(0, 1.3, 0), $item, $motion, 40);
-
-        if ($this->isInDuel()) {
-            $duel = MineceitCore::getDuelHandler()->getDuel($this);
-            $duel->setDropItem($this, $item, $motion);
-        }
-
-        return true;
-    }
-
-    /**
-     * @param bool $value
-     */
-    public function setSneaking(bool $value = true): void
-    {
-        parent::setSneaking($value);
-        if ($this->isInDuel()) {
-            $duel = MineceitCore::getDuelHandler()->getDuel($this);
-            $duel->setSneakingFor($this, $value);
-        }
-    }
-
-
-    /**
-     * @return bool
-     *
-     * Determines whether the player translates all of the messages.
-     */
-    public function doesTranslateMessages(): bool
-    {
-        return $this->translate;
-    }
-
-
-    /**
-     * @param bool $value
-     *
-     * Sets the translate value.
-     */
-    public function setTranslateMessages(bool $value = true): void
-    {
-        $this->translate = $value;
-    }
-
-
-    /**
-     * @param bool $value
-     * @param bool $sendMessage
-     * @param bool $alias
-     *
-     * Sets the player with limited feature mode.
-     */
-    public function setLimitedFeatureMode(bool $value, bool $sendMessage = true, bool $alias = false): void
-    {
-
-        if (!MineceitCore::LIMITED_FEATURES_ENABLED) {
-            return;
-        }
-
-        // Time is in seconds.
-        $limitedFeatures = $this->hasLimitedFeatures();
-
-        if (!$value) {
-            $this->limitedFeaturesTime = 0;
-        } else {
-            $this->limitedFeaturesTime = time() + MineceitUtil::ONE_WEEK_SECONDS * 2;
-        }
-
-        if ($limitedFeatures !== $value) {
-            // TODO SEND MESSAGE
-        }
-
-        $playerHandler = MineceitCore::getPlayerHandler();
-        $aliases = $this->getAliases();
-        $server = $this->getServer();
-
-        foreach ($aliases as $alia) {
-            if ($alia !== $this->getName()) {
-                if (($player = $server->getPlayer($alia)) !== null and $player instanceof MineceitPlayer and $player->isOnline()) {
-                    $player->setLimitedFeatureMode($value, $sendMessage, false);
-                } else {
-                    $playerHandler->updatePlayerData((string)$alia, ['limited-features' => $this->limitedFeaturesTime, 'lastTimePlayed' => time()]);
-                }
-            }
-            // TODO UPDATE DATA OF ALIASES
-        }
-    }
-
-    /**
-     * Determines if player has limited features.
-     *
-     * @return bool
-     */
-    public function hasLimitedFeatures(): bool
-    {
-
-        $limitedFeatures = $this->limitedFeaturesTime - time();
-        return $limitedFeatures > 0;
-    }
-
-    /**
-     * Gets the information of the player.
-     *
-     * @param Language|null $lang
-     *
-     * @return array|string[]
-     */
-    public function getInfo(Language $lang = null): array
-    {
-
-        $x = (int)$this->x;
-        $y = (int)$this->y;
-        $z = (int)$this->z;
-
-        $levelName = $this->level->getName();
-
-        $pRanks = $this->getRanks();
-
-        $ranks = [];
-
-        $locale = $lang != null ? $lang->getLocale() : null;
-
-        foreach ($pRanks as $rank) {
-            $ranks[] = $rank->getName();
-        }
-
-        $ranksStr = implode(", ", $ranks);
-        if (strlen($ranksStr) <= 0) {
-            $ranksStr = $lang->getMessage(Language::NONE);
-        }
-
-        $aliases = $this->getAliases();
-
-        $clicksInfo = $this->getClicksInfo();
-
-        return [
-            "Name" => $this->getName() . ($this->isDisguised() ? " (Disguise -> {$this->getDisplayName()})" : ""),
-            "IP" => $this->getAddress(),
-            "Ping" => $this->getPing(),
-            "Version" => $this->version,
-            "Device OS" => $this->getDeviceOS(true),
-            "Device Model" => $this->getDeviceModel(),
-            "Device ID" => $this->getDeviceId(),
-            "UI" => $this->getUIProfile(),
-            "Ranks" => $ranksStr,
-            //"Gui Scale" => $this->getGuiScale()
-            "Controls" => $this->getInput(true),
-            "Health" => intval($this->getHealth()) . "HP",
-            "Position" => "X: $x, Y: $y, Z: $z",
-            "Level" => $levelName,
-            "Language" => $this->getLanguage()->getNameFromLocale($locale ?? Language::ENGLISH_US),
-            "Aliases" => implode(", ", $aliases),
-            "Current CPS" => $clicksInfo->getCps(),
-            /* "Avg CPS" => $clicksInfo->getAverageCPS(true, 3),
-            "Avg Click Duration" => $clicksInfo->getAverageDurationClicked(true, true, 3),
-            "Total Avg Consistency" => $clicksInfo->getAverageConsistency(false, true, 3),
-            "Previous Avg Consistency" => $clicksInfo->getLastAvgConsistency(), */
-            "Limited Features" => $this->hasLimitedFeatures() ? "True" : "False"
-        ];
-    }
-
-
-    /**
-     * Adds a kill to the player.
-     */
-    public function addKill(): void
-    {
-
-        $this->kills += 1;
-
-        $kills = $this->kills;
-
-        $language = $this->getLanguage();
-
-        $color = MineceitUtil::getThemeColor();
-
-        $killsStr = $language->scoreboard(Language::FFA_SCOREBOARD_KILLS);
-        $killsSb = TextFormat::WHITE . " $killsStr: " . $color . $kills;
-        if ($language->getLocale() === Language::ARABIC)
-            $killsSb = ' ' . $color . $kills . TextFormat::WHITE . " :$killsStr";
-
-        $this->updateLineOfScoreboard(6, $killsSb);
-        $this->setHealth($this->getMaxHealth());
-    }
-
-    /**
-     * Gets the number of kills the player has.
-     *
-     * @return int
-     */
-    public function getKills(): int
-    {
-        return $this->kills;
-    }
-
-    /**
-     * Adds a death to the player.
-     */
-    public function addDeath(): void
-    {
-        $this->deaths += 1;
-    }
-
-    /**
-     * Gets the number of deaths the player has.
-     *
-     * @return int
-     */
-    public function getDeaths(): int
-    {
-        return $this->deaths;
-    }
-
-    /**
-     * @return bool
-     *
-     * Determines if the player is set to pe only queues.
-     */
-    public function isPeOnly(): bool
-    {
-        return $this->peOnly;
-    }
-
-    /**
-     * @param bool $enabled
-     *
-     * Sets the player as queued for pes only.
-     */
-    public function setPeOnly(bool $enabled): void
-    {
-        $this->peOnly = $enabled;
-    }
-
-    /**
-     * @return bool
-     *
-     * Determines if the player has scoreboard enabled.
-     */
-    public function isScoreboardEnabled(): bool
-    {
-        return $this->scoreboardEnabled;
-    }
-
-
-    /**
-     * @param bool $enabled
-     *
-     * Sets the scoreboard as enabled.
-     */
-    public function setScoreboardEnabled(bool $enabled): void
-    {
-        $this->scoreboardEnabled = $enabled;
-    }
-
-
-    /**
-     * @param string $kit
-     * @return int|array|int[]|null
-     *
-     * Gets the elo based on kit.
-     */
-    public function getElo(string $kit = null)
-    {
-
-        if ($kit !== null and isset($this->elo[strtolower($kit)]))
-            return (int)$this->elo[strtolower($kit)];
-        elseif ($kit !== null and $kit === 'global') {
-            $result = 0;
-            $values = array_values($this->elo);
-            $length = count($this->elo);
-            foreach ($values as $value) {
-                $result += $value;
-            }
-
-            if ($length === 0) {
-                return null;
-            }
-            return intval($result / $length);
-        } elseif ($kit !== null and !isset($this->elo[strtolower($kit)])) {
-            $kits = MineceitCore::getKits();
-            $kit = strtolower($kit);
-            if ($kits->isKit($kit)) {
-                $this->elo[$kit] = 1000;
-                return $this->elo[$kit];
-            }
-        }
-
-        return $this->elo;
-    }
-
-
-    /**
-     * @param string $kit
-     * @param int $elo
-     *
-     * Sets the elo based on kit.
-     */
-    public function setElo(string $kit, int $elo): void
-    {
-        $this->elo[$kit] = $elo;
-    }
-
-    /**
-     * @return bool
-     *
-     * Determines if player can place & break blocks.
-     */
-    public function isBuilderModeEnabled(): bool
-    {
-        return $this->builderMode;
-    }
-
-    /**
-     * @param bool $builderMode
-     *
-     * Gives the player the ability to place and break blocks.
-     */
-    public function setBuilderMode(bool $builderMode): void
-    {
-        $this->builderMode = $builderMode;
-    }
-
-    /**
-     * @return bool
-     *
-     * Determines whether the player can build.
-     */
-    public function canBuild(): bool
-    {
-
-        if (!$this->getPermission(MineceitPlayer::PERMISSION_BUILDER_MODE) and !$this->isOp()) {
-            return false;
-        }
-
-        $level = $this->getLevel();
-
-        return $this->builderMode and isset($this->builderLevels[$level->getName()]) and $this->builderLevels[$level->getName()];
-    }
-
-
-    /**
-     * @param string $level
-     * @param bool $value
-     *
-     * Sets whether the player can build in the level.
-     */
-    public function setBuildInLevel(string $level, bool $value): void
-    {
-
-        if (isset($this->builderLevels[$level])) {
-            $this->builderLevels[$level] = $value;
-        }
-    }
-
-
-    /**
-     * @return array
-     */
-    public function getBuilderLevels(): array
-    {
-        return $this->builderLevels;
-    }
-
-
-    /**
-     * Updates the builder levels.
-     */
-    public function updateBuilderLevels(): void
-    {
-
-        $levels = $this->getServer()->getLevels();
-        $duelManager = MineceitCore::getDuelHandler();
-        $replayManager = MineceitCore::getReplayManager();
-
-        foreach ($levels as $level) {
-            $name = $level->getName();
-            if ($duelManager->isDuelLevel($name) or $replayManager->isReplayLevel($level)) {
-                continue;
-            }
-
-            if (!isset($this->builderLevels[$name])) {
-                $this->builderLevels[$name] = true;
-            }
-        }
-    }
-
-
-    /**
-     * @param bool $muted
-     *
-     * Sets the player as muted.
-     */
-    public function setMuted(bool $muted): void
-    {
-
-        if ($muted !== $this->muted) {
-
-            $lang = $this->getLanguage();
-
-            if ($muted) {
-                $this->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $lang->getMessage(Language::PLAYER_SET_MUTED));
-            } else {
-                $this->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $lang->getMessage(Language::PLAYER_SET_UNMUTED));
-            }
-        }
-
-        $this->muted = $muted;
-    }
-
-
-    /**
-     * @return bool
-     *
-     * Determines if the player is muted or not.
-     */
-    public function isMuted(): bool
-    {
-        return $this->muted;
-    }
-
-    /**
-     * @param string $type
-     * @return bool
-     *
-     * Determines if the player has a permission.
-     */
-    public function getPermission(string $type): bool
-    {
-
-        $callable = null;
-
-        switch ($type) {
-            case self::PERMISSION_BUILDER_MODE:
-                $callable = function (Rank $rank) {
-                    return $rank->canEditWorld();
-                };
-                break;
-            case self::PERMISSION_LIGHTNING_ON_DEATH:
-                $callable = function (Rank $rank) {
-                    return $rank->activateLightningOnKill();
-                };
-                break;
-            case self::PERMISSION_RESERVE_EVENT_SLOT:
-                $callable = function (Rank $rank) {
-                    return $rank->reserveSpotInEvent();
-                };
-                break;
-            case self::PERMISSION_TAG:
-                $callable = function (Rank $rank) {
-                    return $this->changeTag or $rank->canChangeTag();
-                };
-                break;
-        }
-
-        if ($callable !== null) {
-            return $this->isOp() or $this->getPermissionFromRanks($callable);
-        }
-
-        return $this->isOp();
-    }
-
-    /**
-     * @return int
-     *
-     * Gets the report permissions of the players.
-     */
-    public function getReportPermissions(): int
-    {
-
-        if ($this->hasAdminPermissions()) {
-            return ReportInfo::PERMISSION_MANAGE_REPORTS;
-        } elseif ($this->hasTrialModPermissions()) {
-            return ReportInfo::PERMISSION_VIEW_ALL_REPORTS;
-        }
-
-        return ReportInfo::PERMISSION_NORMAL;
-    }
-
-
-    /**
-     * @param string $tag
-     * @return bool
-     *
-     * Sets the player's custom tag.
-     */
-    public function setCustomTag(string $tag): bool
-    {
-
-        $perm = $this->getPermission(self::PERMISSION_TAG);
-
-        if ($perm) {
-
-            $oldTag = $this->customTag;
-
-            $lengthOfNew = strlen(TextFormat::clean($tag));
-
-            if ($oldTag === $tag or ($lengthOfNew <= 0 or $lengthOfNew > 15)) return false;
-
-            $this->customTag = $tag;
-
-            return true;
-        }
-
-        return false;
-    }
-
-    /**
-     * @return string
-     *
-     * Gets the player's custom tag.
-     */
-    public function getCustomTag(): string
-    {
-        return $this->customTag;
-    }
-
-    /**
-     *
-     * Gets the ranks of the player.
-     *
-     * @param bool $asString
-     *
-     * @return array|Rank[]|string[]
-     */
-    public function getRanks(bool $asString = false): array
-    {
-
-        if ($asString) {
-
-            $ranks = [];
-
-            foreach ($this->ranks as $rank)
-                $ranks[] = $rank->getLocalName();
-
-            return $ranks;
-        }
-
-        return $this->ranks;
-    }
-
-
-    /**
-     * Sets the ranks of the player.
-     *
-     * @param array|Rank[] $ranks
-     */
-    public function setRanks($ranks = []): void
-    {
-
-        $size = count($ranks);
-
-        if ($size > 0) {
-
-            $this->ranks = $ranks;
-            $this->updateNameTag();
-        }
-    }
-
-
-    /**
-     * Removes the rank of a player.
-     *
-     * @param string $rank
-     */
-    public function removeRank(string $rank): void
-    {
-
-        $keys = array_keys($this->ranks);
-
-        foreach ($keys as $key) {
-
-            $theRank = $this->ranks[$key];
-
-            if ($theRank->getLocalName() === $rank) {
-                unset($this->ranks[$key]);
-                break;
-            }
-        }
-
-        if (!$this->canFlyInLobby() and $this->isPlayerFlying()) {
-            $this->setPlayerFlying(false);
-        }
-
-        $this->updateNameTag();
-    }
-
-    /**
-     * @return array
-     *
-     * Gets the aliases of the player.
-     */
-    public function getAliases()
-    {
-        $playerHandler = MineceitCore::getPlayerHandler();
-        $aliasManager = $playerHandler->getAliasManager();
-        return $aliasManager->getAliases($this);
-    }
-
-
-    /**
-     * @param LevelSoundEventPacket $packet
-     * @return bool
-     *
-     * Handles the level sound event packet.
-     */
-    public function handleLevelSoundEvent(LevelSoundEventPacket $packet): bool
-    {
-
-        $sounds = [41 => true, 42 => true, 43 => true];
-
-        $sound = $packet->sound;
-
-        if (isset($sounds[$sound])) {
-
-            MineceitUtil::broadcastDataPacket($this, $packet, function (MineceitPlayer $player) {
-                return $player->isSwishEnabled();
-            });
-
-        } else {
-
-            $this->getLevel()->broadcastPacketToViewers($this, $packet);
-        }
-
-        return true;
-    }
-
-    /**
-     * @return bool
-     *
-     * Placement function for when Mineceit actually adds particles.
-     */
-    public function isParticlesEnabled(): bool
-    {
-        return $this->particlesEnabled;
-    }
-
-    /**
-     * @param bool $particle
-     *
-     * Placement function for when Mineceit actually adds particles
-     */
-    public function setParticlesEnabled(bool $particle): void
-    {
-        $this->particlesEnabled = $particle;
-    }
-
-    /**
-     * @param bool $enabled
-     *
-     * Enables/Disables the swish sound.
-     */
-    public function setSwishEnabled(bool $enabled): void
-    {
-        $this->swishSound = $enabled;
-    }
-
-    /**
-     * @return bool
-     *
-     * Is the swish sound enabled.
-     */
-    public function isSwishEnabled(): bool
-    {
-        return $this->swishSound;
-    }
-
-    /**
-     * @return bool
-     *
-     * Can change the player's tag -> used for data storage.
-     */
-    public function canChangeTag(): bool
-    {
-        return $this->changeTag;
-    }
-
-
-    /**
-     * @return bool
-     *
-     * Determines whether the player has lightning enabled when killing other player.
-     */
-    public function lightningEnabled(): bool
-    {
-        return $this->lightningEnabled;
-    }
-
-    /**
-     * Loads the player's data.
-     * @param array $data
-     */
-    public function loadData($data = []): void
-    {
-
-        if (isset($data['kills']))
-            $this->kills = (int)$data['kills'];
-        if (isset($data['deaths']))
-            $this->deaths = (int)$data['deaths'];
-        if (isset($data['scoreboards-enabled']))
-            $this->scoreboardEnabled = (bool)$data['scoreboards-enabled'];
-        if (isset($data['pe-only']))
-            $this->peOnly = (bool)$data['pe-only'];
-        if (isset($data['place-break']))
-            $this->builderMode = (bool)$data['place-break'];
-        if (isset($data['muted']))
-            $this->muted = (bool)$data['muted'];
-        if (isset($data['swish-sound'])) {
-            $this->swishSound = (bool)$data['swish-sound'];
-        }
-
-        $this->limitedFeaturesTime = 0;
-        if (isset($data['limited-features']) and MineceitCore::LIMITED_FEATURES_ENABLED) {
-            $time = (int)$data['limited-features'];
-            if ($time > 0) {
-                $this->limitedFeaturesTime = $time;
-            }
-        }
-
-        $this->lastTimePlayed = -1;
-        if (isset($data['lastTimePlayed'])) {
-            // Updates the limited features time.
-            $this->lastTimePlayed = (int)$data['lastTimePlayed'];
-        }
-
-
-        if (isset($data['language'])) {
-
-            $languageFromData = (string)$data['language'];
-
-            $language = MineceitCore::getPlayerHandler()->getLanguageFromOldName($languageFromData);
-            if ($language !== null and $this->locale !== $language->getLocale()) {
-                $this->currentLang = $this->locale;
-                $form = FormUtil::getLanguageForm($this->locale);
-                $this->sendFormWindow($form, ['locale' => $this->locale]);
-            } else {
-                $this->currentLang = $languageFromData;
-            }
-
-        }
-        if (isset($data['particles']))
-            $this->particlesEnabled = (bool)$data['particles'];
-        if (isset($data['tag']))
-            $this->customTag = (string)$data['tag'];
-        if (isset($data['elo']))
-            $this->elo = (array)$data['elo'];
-        if (isset($data['translate']))
-            $this->translate = (bool)$data['translate'];
-        if (isset($data['ranks'])) {
-            $ranks = $data['ranks'];
-            $size = count($ranks);
-            $rankHandler = MineceitCore::getRankHandler();
-            $result = [];
-            if ($size > 0) {
-                foreach ($ranks as $rankName) {
-                    $rankName = strval($rankName);
-                    $rank = $rankHandler->getRank($rankName);
-                    if ($rank !== null)
-                        $result[] = $rank;
-                }
-            } else {
-                $defaultRank = $rankHandler->getDefaultRank();
-                if ($defaultRank !== null)
-                    $result = [$defaultRank];
-            }
-            $this->ranks = $result;
-        }
-
-        // Removes permissions.
-
-        if (isset($data['permissions'])) {
-            $permissions = $data['permissions'];
-            if (isset($permissions[self::PERMISSION_TAG])) {
-                $this->changeTag = (bool)$permissions[self::PERMISSION_TAG];
-            }
-        }
-
-        if (isset($data['change-tag'])) {
-            $this->changeTag = (bool)$data['change-tag'];
-        }
-
-        if (isset($data['lightning-enabled'])) {
-            $this->lightningEnabled = (bool)$data['lightning-enabled'];
-        }
-
-        /* if(isset($data['permissions'])) {
-            $permissions = $data['permissions'];
-            $keys = array_keys($permissions);
-            foreach($keys as $key)
-                $this->permissions[$key] = $permissions[$key];
-        } */
-
-        $levels = $this->server->getLevels();
-
-        $duelHandler = MineceitCore::getDuelHandler();
-        $replayHandler = MineceitCore::getReplayManager();
-
-        foreach ($levels as $level) {
-            $name = $level->getName();
-            if ($duelHandler->isDuelLevel($name) or $replayHandler->isReplayLevel($name)) {
-                continue;
-            }
-
-            $this->builderLevels[$name] = true;
-        }
-
-        if ($this->scoreboardEnabled) {
-            $this->setScoreboard(Scoreboard::SCOREBOARD_SPAWN);
-        }
-
-        $itemHandler = MineceitCore::getItemHandler();
-
-        $itemHandler->spawnHubItems($this);
-        $this->setSpawnNameTag();
-
-        $this->setAllowFlight($this->canFlyInLobby());
-
-        if ($this->hasLimitedFeatures() and MineceitCore::LIMITED_FEATURES_ENABLED) {
-
-            $limitedFeaturesTime = $this->limitedFeaturesTime - time();
-
-            $days = strval(intval($limitedFeaturesTime / 86400) % 7);
-            $weeks = strval(intval($limitedFeaturesTime / 604800));
-            $minutes = strval(intval($limitedFeaturesTime / 60) % 60);
-            $hours = strval(intval($limitedFeaturesTime / 3600) % 60);
-
-            $message = TextFormat::RED . "You are in limited features mode for {$weeks} Weeks, {$days} Days, {$hours} Hours, & {$minutes} minutes.";
-            $this->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $message);
-        }
-
-        $this->loadedData = true;
-    }
-
-
-    /**
-     * @param callable $function
-     * @return bool
-     *
-     * Generates the function.
-     */
-    private function getPermissionFromRanks(callable $function): bool
-    {
-        $ranks = $this->getRanks();
-        if (count($ranks) <= 0) {
-            return false;
-        }
-
-        foreach ($ranks as $rank) {
-            if ($function($rank)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-
-    /**
-     * @return bool
-     *
-     * Determines whether the player has loaded their data or not.
-     */
-    public function hasLoadedData(): bool
-    {
-        return $this->loadedData;
-    }
-
-
-    /**
-     * @param string|null $name
-     * @param Skin|null $disguise
-     *
-     * Sets the player's disguised.
-     */
-    public function setDisguise(string $name = null, Skin $disguise = null): void
-    {
-
-        if ($name === null and $disguise === null) {
-            $this->disguised = null;
-        } else {
-            $this->disguised = [
-                'name' => $name,
-                'disguise' => $disguise
-            ];
-            $this->setDisplayName($name);
-        }
-        // TODO SEND MESSAGE SAYING PLAYER IS DISGUISED AND UPDATE SKINS.
-    }
-
-    /**
-     * @return bool
-     *
-     * Returns whether the player is disguised or not.
-     */
-    public function isDisguised(): bool
-    {
-        return $this->disguised !== null;
-    }
-
-
-    /**
-     * @param ReportInfo $info
-     */
-    public function addReport(ReportInfo $info): void
-    {
-        $reporter = $info->getReporter();
-        $reportType = $info->getReportType();
-        if (!isset($this->reports[$reportType])) {
-            $this->reports[$reportType] = [];
-        }
-        $this->reports[$reportType][$reporter] = $info;
-    }
-
-    /**
-     * @param MineceitPlayer $reporter
-     * @param int $reportType
-     * @return bool
-     *
-     * Determines if the player has reported you.
-     */
-    public function hasReport(MineceitPlayer $reporter, int $reportType): bool
-    {
-        if (isset($this->reports[$reportType])) {
-            $reports = (array)$this->reports[$reportType];
-            return isset($reports[$reporter->getName()]);
-        }
-        return false;
-    }
-
-    /**
-     *
-     * @param int $reportType
-     *
-     * @return int
-     *
-     * Gets the number of reports on you while you were.
-     */
-    public function getOnlineReportsCount(int $reportType = ReportInfo::TYPE_HACK): int
-    {
-
-        if (!isset($this->reports[$reportType])) {
-            return 0;
-        }
-
-        return count($this->reports[$reportType]);
-    }
-
-
-    /**
-     * @return int
-     *
-     * Gets the last time the player played.
-     */
-    public function getLastTimePlayed(): int
-    {
-        return $this->lastTimePlayed;
-    }
-
-
-    /**
-     * @return int
-     *
-     * Gets the limited features time.
-     */
-    public function getLimitedFeaturesTime(): int
-    {
-        return $this->limitedFeaturesTime;
-    }
-
-
-    /**
-     * @param bool $allReports
-     * @param int ...$reportTypes
-     *
-     * @return ReportInfo[]|array
-     *
-     * Gets all of the reports on you.
-     */
-    public function getReports(bool $allReports = false, int...$reportTypes)
-    {
-
-        if (!$allReports) {
-            $result = [];
-            foreach ($reportTypes as $type) {
-                if (!isset($this->reports[$type])) {
-                    continue;
-                }
-                $reports = (array)$this->reports[$type];
-                foreach ($reports as $key => $value) {
-                    if ($value instanceof ReportInfo) {
-                        $result[$value->getLocalName()] = $value;
-                    }
-                }
-            }
-            return $result;
-        } else {
-            $reportManager = MineceitCore::getReportManager();
-            return $reportManager->getReportsOf($this->getName(), $reportTypes);
-        }
-    }
-
-    /**
-     * @return array|ReportInfo[]
-     *
-     * Gets the report history of the current player.
-     */
-    public function getReportHistory()
-    {
-        $reportManager = MineceitCore::getReportManager();
-        return $reportManager->getReportHistoryOf($this->getName());
-    }
-
-    /**
-     * @return string
-     *
-     * Gets the time zone.
-     */
-    public function getTimeZone(): string
-    {
-        $playerManager = MineceitCore::getPlayerHandler();
-        $ipManager = $playerManager->getIPManager();
-        return $ipManager->getTimeZone($this);
-    }
-
-
-    /**
-     * @param array $data
-     *
-     * Adds the report search to the history.
-     */
-    public function setReportSearchHistory(array $data): void
-    {
-        $this->reportsSearchHistory[count($this->reportsSearchHistory)] = $data;
-    }
-
-    /**
-     * @return array|null
-     *
-     * Gets the last search report.
-     */
-    public function getLastSearchReportHistory()
-    {
-        $index = count($this->reportsSearchHistory) - 1;
-        return isset($this->reportsSearchHistory[$index]) ? $this->reportsSearchHistory[$index] : null;
-    }
-
-
-    /**
-     * @return bool
-     *
-     * Determines whether the player can duel.
-     */
-    public function canDuel(): bool
-    {
-        return !$this->isFrozen() and !$this->isInEvent() and !$this->isInParty() and !$this->isInDuel() and !$this->isInArena() and !$this->isADuelSpec();
-    }
-
-    /**
-     * @param int $number
-     *
-     * Disables the player for a few.
-     */
-    public function disableForChecks(int $number): void
-    {
-        if ($this->clickSpeedCheck !== null) {
-            $this->clickSpeedCheck->setDisabled($number);
-        }
-        if ($this->diggingCheck !== null) {
-            $this->diggingCheck->setDisabled($number);
-        }
-    }
-
-
-    /**
-     * @return CPSCheck|null
-     *
-     * Gets the click speed check.
-     */
-    public function getCPSCheck()
-    {
-        return $this->clickSpeedCheck;
-    }
-
-
-    /**
-     * @return DiggingCheck|null
-     */
-    public function getDiggingCheck()
-    {
-        return $this->diggingCheck;
-    }
-
-
-    /**
-     * @return ConsistencyCheck|null
-     */
-    public function getConsistencyCheck()
-    {
-        return $this->consistencyCheck;
-    }
-
-
-    public function teleport(Vector3 $pos, float $yaw = null, float $pitch = null): bool
-    {
-        $result = parent::teleport($pos, $yaw, $pitch);
-
-        if ($result and $this->clickSpeedCheck !== null) {
-            $this->disableForChecks(1500);
-        }
-
-        return $result;
-    }
-
-
-    /**
-     * @param int $action
-     *
-     * Tracks the player's current action.
-     */
-    public function setAction(int $action): void
-    {
-
-        $currentTime = round(microtime(true) * 1000);
-
-        if ($this->currentAction === -1) {
-
-            $this->currentAction = $action;
-            $this->currentActionTime = $currentTime;
-            $this->lastAction = PlayerActionPacket::ACTION_ABORT_BREAK;
-            $this->lastActionTime = 0;
-
-        } else {
-
-            $this->lastAction = $this->currentAction;
-            $this->lastActionTime = $this->currentActionTime;
-
-            $this->currentAction = $action;
-            $this->currentActionTime = $currentTime;
-        }
-    }
-
-
-    /**
-     * Updates the ping of the player.
-     */
-    private function doUpdatePing(): void
-    {
-
-        $pkt = MineceitUtil::constructCustomPkt(["GetPing", $this->getName()]);
-        RequestPool::addRequest(Request::TYPE_PING, $this, $pkt->buffer, function ($data, $uuid) {
-            if (($player = MineceitUtil::getPlayerFromUUID($uuid)) != null && $player instanceof MineceitPlayer) {
-                $player->completePingUpdate($data['ping']);
-            }
-        });
-        $this->dataPacket($pkt);
-    }
-
-    /**
-     * @param int $ping
-     *
-     * Updates the ping accordingly.
-     */
-    public function completePingUpdate(int $ping): void
-    {
-
-        $this->ping = $ping;
-
-        $this->updatePingSB($ping);
-    }
-
-
-    /**
-     * @param int $ping
-     *
-     * Updates the ping for scoreboard.
-     */
-    private function updatePingSB(int $ping): void
-    {
-
-        $color = MineceitUtil::getThemeColor();
-
-        $yourLang = $this->getLanguage();
-
-        if ($this->scoreboardType === Scoreboard::SCOREBOARD_SPAWN or $this->scoreboardType === Scoreboard::SCOREBOARD_FFA) {
-
-            $this->updateLineOfScoreboard(3, TextFormat::WHITE . ' Ping: ' . $color . $ping);
-
-        } elseif ($this->scoreboardType === Scoreboard::SCOREBOARD_DUEL) {
-
-            $duel = MineceitCore::getDuelHandler()->getDuel($this);
-
-            if ($duel !== null and $duel->getOpponent($this) !== null) {
-
-                $opponent = $duel->getOpponent($this);
-
-                $theirLang = $opponent->getLanguage();
-
-                $yourPing = TextFormat::WHITE . ' ' . $yourLang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_PING) . ': ' . $color . $ping;
-                $theirPing = TextFormat::WHITE . ' ' . $theirLang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_PING) . ': ' . $color . $ping;
-
-                if ($yourLang->getLocale() === Language::ARABIC)
-                    $yourPing = $color . ' ' . $ping . TextFormat::WHITE . ' :' . $yourLang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_PING);
-
-                if ($theirLang->getLocale() === Language::ARABIC)
-                    $theirPing = $color . ' ' . $ping . TextFormat::WHITE . ' :' . $theirLang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_PING);
-
-                $this->updateLineOfScoreboard(6, $yourPing);
-                $opponent->updateLineOfScoreboard(9, $theirPing);
-            }
-        } elseif ($this->isInEventDuel()) {
-
-            $event = MineceitCore::getEventManager()->getEventFromPlayer($this);
-            $eventDuel = $event->getCurrentDuel();
-
-            $opponent = $eventDuel->getOpponent($this);
-
-            if ($eventDuel->getStatus() < 2 and $opponent !== null) {
-
-                $theirLang = $opponent->getLanguage();
-
-                $yourPing = TextFormat::WHITE . ' ' . $yourLang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_PING) . ': ' . $color . $ping;
-                $theirPing = TextFormat::WHITE . ' ' . $theirLang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_PING) . ': ' . $color . $ping;
-
-                if ($yourLang->getLocale() === Language::ARABIC)
-                    $yourPing = $color . ' ' . $ping . TextFormat::WHITE . ' :' . $yourLang->scoreboard(Language::DUELS_SCOREBOARD_YOUR_PING);
-
-                if ($theirLang->getLocale() === Language::ARABIC)
-                    $theirPing = $color . ' ' . $ping . TextFormat::WHITE . ' :' . $theirLang->scoreboard(Language::DUELS_SCOREBOARD_THEIR_PING);
-
-                $this->updateLineOfScoreboard(6, $yourPing);
-                $opponent->updateLineOfScoreboard(9, $theirPing);
-            }
-        }
-    }
+class MineceitPlayer extends Player implements
+	IFishingBehaviorEntity,
+	IKitHolderEntity,
+	DeviceIds{
+
+	public const TAG_COMBAT = 'tag.combat';
+	public const TAG_NORMAL = 'tag.normal';
+
+	private $tagType = self::TAG_NORMAL;
+
+	/** @var ScoreboardInfo|null */
+	private $scoreboardInfo = null;
+	/** @var FishingBehavior|null */
+	private $fishingBehavior = null;
+	/** @var ClientInfo|null */
+	private $clientInfo = null;
+	/** @var ClicksInfo|null */
+	private $clicksInfo = null;
+	/** @var PlayerExtensions|null */
+	private $extensions = null;
+	/** @var IPInfo|null - Stores the info of the ip. */
+	private $ipInfo = null;
+	/** @var PlayerReportsInfo|null */
+	private $reportsInfo = null;
+	/** @var SettingsInfo|null */
+	private $settingsInfo = null;
+	/** @var PlayerKitHolder|null */
+	private $kitHolderInfo = null;
+	/** @var StatsInfo|null */
+	private $statsInfo = null;
+	/** @var EloInfo|null */
+	private $eloInfo = null;
+	/** @var DisguiseInfo|null */
+	private $disguiseInfo = null;
+
+	private $formData = [];
+
+	/** @var bool */
+	private $lookingAtForm = false;
+
+	/* Combat values */
+	private $secsInCombat = 0;
+	private $combat = false;
+
+	/* Enderpearl values */
+	private $secsEnderpearl = 0;
+	private $throwPearl = true;
+
+	/* Gapple values */
+	private $secsGap = 0;
+	private $eatGap = true;
+
+	/* Arrow values */
+	private $secsArr = 0;
+	private $arrCD = true;
+
+	/** @var int
+	 * Determines how many seconds the player has een on the server.
+	 */
+	private $currentSecond = 0;
+
+	/* @var FFAArena|null */
+	private $currentArena = null;
+
+	/* @var bool */
+	private $frozen = false;
+
+	/* @var string */
+	private $follower = [];
+	private $following = '';
+
+	/* @var array */
+	private $duelHistory = [];
+
+	/** @var bool */
+	private $dead = false;
+
+	private $spam = 0;
+	private $tellSpam = 0;
+
+	/** @var int */
+	private $lastTimeHosted = -1;
+
+	/** @var bool */
+	private $silentStaff = false;
+	/** @var string */
+	private $cape = '';
+	/** @var string */
+	private $stuff = '';
+	/** @var string */
+	private $potcolor = 'default';
+	/** @var string */
+	private $tag = '';
+
+	/** @var int */
+	private $lastAction = -1;
+	/** @var int */
+	private $lastActionTime = -1;
+
+	/** @var int */
+	private $currentAction = -1;
+	/** @var int */
+	private $currentActionTime = -1;
+
+	/** @var bool */
+	private $loadedData = false;
+	private $target = null;
+
+	// ---------------------------------- PLAYER DATA -----------------------------------
+
+	/** @var bool */
+	private $muted = false;
+
+	/** @var array|Rank[] */
+	private $ranks = [];
+
+	/** @var array|string[] */
+	private $validtags = [];
+
+	/** @var array|string[] */
+	private $validcapes = [];
+
+	/** @var array|string[] */
+	private $validstuffs = [];
+
+	/** @var array|string[] */
+	private $bpclaimed = [];
+
+	/** @var bool */
+	private $isbuybp = false;
+
+	/** @var string */
+	private $guild = '';
+
+	/** @var string */
+	private $guildRegion = '';
+
+	/**
+	 * Occurs once this player joins the world.
+	 */
+	public function onJoin() : void{
+	}
+
+	/**
+	 * @return IPInfo|null
+	 *
+	 * Gets the ip info of the player.
+	 */
+	public function getIPInfo() : ?IPInfo{
+		$this->ipInfo = $this->ipInfo ?? MineceitCore::getPlayerHandler()
+				->getIPManager()->getInfo($this->getAddress());
+		return $this->ipInfo;
+	}
+
+	/**
+	 * @return PlayerReportsInfo|null
+	 * Gets the reports info of the player.
+	 */
+	public function getReportsInfo() : ?PlayerReportsInfo{
+		$this->reportsInfo = $this->reportsInfo ?? new PlayerReportsInfo($this);
+		return $this->reportsInfo;
+	}
+
+	/**
+	 * @return Human|null
+	 *
+	 * Gets the kit holder entity.
+	 */
+	public function getKitHolderEntity() : ?Human{
+		return $this;
+	}
+
+	/**
+	 * @param MineceitPlayer|CommandSender $player
+	 *
+	 * @return bool
+	 */
+	public function equalsPlayer($player) : bool{
+		if($player !== null && $player instanceof MineceitPlayer)
+			return $player->getName() === $this->getName();
+		return false;
+		//return $player->getName() === $this->getName() && $player->getId() === $this->getId();
+	}
+
+	/**
+	 * @return MineceitPlayer|null
+	 */
+	public function getPlayer() : ?MineceitPlayer{
+		return $this;
+	}
+
+	public function getFishingEntity() : ?Entity{
+		return $this;
+	}
+
+	/**
+	 * @param bool $animate
+	 *
+	 * @return bool
+	 *
+	 * Player uses the fishing rod.
+	 */
+	public function useRod(bool $animate = false) : bool{
+
+		if($this->getExtensions()->isSpectator() || $this->isImmobile()){
+			return false;
+		}
+
+		$duel = MineceitCore::getDuelHandler()->getDuel($this);
+		$fishingBehaviour = $this->getFishingBehavior();
+
+		if($duel !== null){
+			if($duel->isCountingDown()){
+				return false;
+			}
+			$duel->setFishingFor($this, !$fishingBehaviour->isFishing());
+		}
+
+		if($fishingBehaviour->isFishing()){
+			$fishingBehaviour->stopFishing(false, $animate);
+		}else{
+			$fishingBehaviour->startFishing($animate);
+		}
+		return true;
+	}
+
+	/**
+	 * @return PlayerExtensions|null
+	 *
+	 * Gets the player extension methods.
+	 */
+	public function getExtensions() : ?PlayerExtensions{
+		$this->extensions = $this->extensions ?? new PlayerExtensions($this);
+		return $this->extensions;
+	}
+
+	public function getFishingBehavior() : ?FishingBehavior{
+		$this->fishingBehavior = $this->fishingBehavior ?? new FishingBehavior($this);
+		$this->fishingBehavior->setDamageRod(true);
+		return $this->fishingBehavior;
+	}
+
+	/**
+	 * @param EnderPearl $item
+	 * @param bool       $animate
+	 *
+	 * @return bool
+	 *
+	 * Throws the enderpearl.
+	 */
+	public function throwPearl(EnderPearl $item, bool $animate = false) : bool{
+
+		$exec = !$this->getExtensions()->isSpectator() && !$this->isImmobile();
+
+		$duelHandler = MineceitCore::getDuelHandler();
+		$duel = $duelHandler->getDuel($this);
+		$botHandler = MineceitCore::getBotHandler();
+		$bot = $botHandler->getDuel($this);
+		$eventManager = MineceitCore::getEventManager()->getEventFromPlayer($this);
+
+		if($exec && $duel !== null){
+			$exec = !$duel->isCountingDown();
+		}
+
+		if($exec && $bot !== null){
+			$exec = !$bot->isCountingDown();
+		}
+
+		if($exec && $eventManager !== null && $eventManager->getCurrentDuel() !== null){
+			$exec = !($eventManager->getCurrentDuel()->getStatus() === MineceitEventDuel::STATUS_STARTING);
+		}
+
+		if($exec){
+
+			$players = $this->getLevel()->getPlayers();
+
+			$tag = Entity::createBaseNBT($this->add(0.0, 0.0, 0.0), $this->getDirectionVector(), (float) $this->yaw, (float) $this->pitch);
+			$pearl = Entity::createEntity('EnderPearl', $this->getLevelNonNull(), $tag, $this);
+			if($pearl !== null && $pearl instanceof EPearl){
+				$event = new ProjectileLaunchEvent($pearl);
+				$event->call();
+
+				if(
+					$event->isCancelled() ||
+					($this->getExtensions()->isSpectator() && $this->isImmobile())
+				){
+					$pearl->kill();
+				}else{
+					$pearl->spawnToAll();
+				}
+			}
+
+			$this->setThrowPearl(false);
+
+			if($animate === true){
+				$pkt = new AnimatePacket();
+				$pkt->action = AnimatePacket::ACTION_SWING_ARM;
+				$pkt->entityRuntimeId = $this->getId();
+				$this->getServer()->broadcastPacket($players, $pkt);
+			}
+
+			if(!$this->isCreative()){
+				$inv = $this->getInventory();
+				$count = $item->getCount() - 1;
+				if($count === 0) $inv->setItem($inv->getHeldItemIndex(), Item::get(0));
+				else $inv->setItem($inv->getHeldItemIndex(), Item::get($item->getId(), $item->getDamage(), $count));
+			}
+		}
+
+		if($exec && $duel !== null)
+			$duel->setThrowFor($this, $item);
+
+		return $exec;
+	}
+
+	/**
+	 * @param bool $throw
+	 * @param bool $message
+	 */
+	public function setThrowPearl(bool $throw = true, bool $message = true) : void{
+
+		$language = $this->getLanguageInfo()->getLanguage();
+
+		if(!$throw){
+
+			$this->secsEnderpearl = 10;
+			$this->getExtensions()->setXpAndProgress(10, 1.0);
+
+			$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $language->generalMessage(Language::SET_IN_ENDERPEARLCOOLDOWN);
+
+			if($message && $this->throwPearl){
+				$this->sendMessage($msg);
+			}
+		}else{
+
+			$this->secsEnderpearl = 0;
+			$this->getExtensions()->setXpAndProgress(0, 0.0);
+
+			$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $language->generalMessage(Language::REMOVE_FROM_ENDERPEARLCOOLDOWN);
+
+			if($message && !$this->throwPearl){
+				$this->sendMessage($msg);
+			}
+		}
+
+		$this->throwPearl = $throw;
+	}
+
+	/**
+	 * @return LanguageInfo|null
+	 * Gets the language info of the player.
+	 */
+	public function getLanguageInfo() : ?LanguageInfo{
+		return $this->getSettingsInfo()->getLanguageInfo();
+	}
+
+	/**
+	 * @return SettingsInfo|null
+	 * Gets the settings info of the player.
+	 */
+	public function getSettingsInfo() : ?SettingsInfo{
+		$this->settingsInfo = $this->settingsInfo ?? new SettingsInfo($this);
+		return $this->settingsInfo;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Eat the gapple.
+	 */
+	public function eatGap() : bool{
+		if(
+			!$this->getExtensions()->isSpectator()
+			&& !$this->isImmobile()
+		){
+			$this->setEatGap(false);
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * @param bool $eat
+	 * @param bool $message
+	 */
+	public function setEatGap(bool $eat = true, bool $message = true) : void{
+
+		$language = $this->getLanguageInfo()->getLanguage();
+
+		if(!$eat){
+
+			$this->secsGap = 7;
+			$this->getExtensions()->setXpAndProgress(7, 1.0);
+
+			$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $language->generalMessage(Language::SET_IN_GAPPLECOOLDOWN);
+
+			if($message && $this->eatGap){
+				$this->sendMessage($msg);
+			}
+		}else{
+
+			$this->secsGap = 0;
+			$this->getExtensions()->setXpAndProgress(0, 0.0);
+
+			$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $language->generalMessage(Language::REMOVE_FROM_GAPPLECOOLDOWN);
+
+			if($message && !$this->eatGap){
+				$this->sendMessage($msg);
+			}
+		}
+
+		$this->eatGap = $eat;
+	}
+
+	/**
+	 * @param SplashPotion $item
+	 * @param bool         $animate
+	 *
+	 * @return bool
+	 *
+	 * Throws the potion.
+	 */
+	public function throwPotion(SplashPotion $item, bool $animate = false) : bool{
+
+		$exec = !$this->getExtensions()->isSpectator() && !$this->isImmobile();
+
+		$duelHandler = MineceitCore::getDuelHandler();
+		$duel = $duelHandler->getDuel($this);
+		$botHandler = MineceitCore::getBotHandler();
+		$bot = $botHandler->getDuel($this);
+		$eventManager = MineceitCore::getEventManager()->getEventFromPlayer($this);
+
+		if($exec && $duel !== null){
+			$exec = !$duel->isCountingDown();
+		}
+
+		if($exec && $bot !== null){
+			$exec = !$bot->isCountingDown();
+		}
+
+		if($exec && $eventManager !== null && $eventManager->getCurrentDuel() !== null){
+			$exec = !($eventManager->getCurrentDuel()->getStatus() === MineceitEventDuel::STATUS_STARTING);
+		}
+
+		if($exec){
+
+			$players = $this->getLevel()->getPlayers();
+			$item->onClickAir($this, $this->getDirectionVector());
+
+			if($animate){
+				$pkt = new AnimatePacket();
+				$pkt->action = AnimatePacket::ACTION_SWING_ARM;
+				$pkt->entityRuntimeId = $this->getId();
+				$this->getServer()->broadcastPacket($players, $pkt);
+			}
+
+			if(!$this->isCreative()){
+				$inv = $this->getInventory();
+				$inv->setItem($inv->getHeldItemIndex(), Item::get(0));
+			}
+		}
+
+		if($exec && $duel !== null)
+			$duel->setThrowFor($this, $item);
+
+		return $exec;
+	}
+
+	/**
+	 * Updates the tag of the player.
+	 */
+	public function updateNameTag() : void{
+		if($this->frozen){
+			$this->setFrozenNameTag();
+		}elseif($this->tagType === self::TAG_NORMAL){
+			$this->setNormalNameTag();
+		}elseif($this->tagType === self::TAG_COMBAT){
+			$this->setCombatNameTag();
+		}
+	}
+
+	public function setFrozenNameTag() : void{
+		$rankHandler = MineceitCore::getRankHandler();
+		$rankFormat = $rankHandler->formatRanksForTag($this);
+		$name = $rankFormat . TextFormat::WHITE . ' [' . TextFormat::AQUA . 'Frozen' . TextFormat::WHITE . ']' .
+			"\n" . TextFormat::GRAY . $this->getClientInfo()->getDeviceOS(true) .
+			TextFormat::DARK_GRAY . ' - ' . TextFormat::GRAY . $this->getClientInfo()->getInputAtLogin(true);
+		$this->setNameTag($name);
+	}
+
+	/**
+	 * @return ClientInfo|null
+	 *
+	 * Gets the player's client info.
+	 */
+	public function getClientInfo() : ?ClientInfo{
+		$this->clientInfo = $this->clientInfo ?? new ClientInfo($this);
+		return $this->clientInfo;
+	}
+
+	/**
+	 * Sets the normal name tag.
+	 */
+	public function setNormalNameTag() : void{
+		$rankHandler = MineceitCore::getRankHandler();
+		$rankFormat = $rankHandler->formatRanksForTag($this);
+		$name = $rankFormat . "\n" . TextFormat::GRAY . $this->getClientInfo()
+				->getDeviceOS(true) . TextFormat::DARK_GRAY . ' - ' .
+			TextFormat::GRAY . $this->getClientInfo()->getInputAtLogin(true);
+		$this->setNameTag($name);
+		$this->tagType = self::TAG_NORMAL;
+	}
+
+	/**
+	 * Sets the combat name tag.
+	 */
+	public function setCombatNameTag() : void{
+		$rankHandler = MineceitCore::getRankHandler();
+		$rankFormat = $rankHandler->formatRanksForTag($this);
+		$name = $rankFormat . TextFormat::WHITE . ' [' . TextFormat::LIGHT_PURPLE . (int) $this->getHealth() . TextFormat::WHITE . ']' . "\n" .
+			TextFormat::LIGHT_PURPLE . 'CPS: ' . TextFormat::WHITE . $this->getClicksInfo()->getCps()
+			. TextFormat::LIGHT_PURPLE . ' Ping: ' . TextFormat::WHITE . $this->getPing();
+		$this->setNameTag($name);
+		$this->tagType = self::TAG_COMBAT;
+	}
+
+	/**
+	 * @return ClicksInfo|null
+	 *
+	 * Gets the clicks info of the player.
+	 */
+	public function getClicksInfo() : ?ClicksInfo{
+		$this->clicksInfo = $this->clicksInfo ?? new ClicksInfo($this);
+		return $this->clicksInfo;
+	}
+
+	/**
+	 * @param Form  $form
+	 * @param array $addedContent
+	 *
+	 * Sends the form to a player.
+	 */
+	public function sendFormWindow(Form $form, array $addedContent = []) : void{
+		if(!$this->lookingAtForm){
+
+			$formToJSON = $form->jsonSerialize();
+			$content = [];
+
+			if(isset($formToJSON['content']) && is_array($formToJSON['content'])){
+				$content = $formToJSON['content'];
+			}elseif(isset($formToJSON['buttons']) && is_array($formToJSON['buttons'])){
+				$content = $formToJSON['buttons'];
+			}
+
+			if(!empty($addedContent)){
+				$content = array_replace($content, $addedContent);
+			}
+
+			$this->formData = $content;
+			$this->lookingAtForm = true;
+			$this->sendForm($form);
+		}
+	}
+
+	/**
+	 * @return array
+	 *
+	 * Officially removes the form data from the player.
+	 */
+	public function removeFormData() : array{
+		$data = $this->formData;
+		$this->formData = [];
+		return $data;
+	}
+
+	/**
+	 * @param int   $formId
+	 * @param mixed $responseData
+	 *
+	 * @return bool
+	 */
+	public function onFormSubmit(int $formId, $responseData) : bool{
+		$this->lookingAtForm = false;
+		$result = parent::onFormSubmit($formId, $responseData);
+		if(isset($this->forms[$formId])){
+			unset($this->forms[$formId]);
+		}
+		return $result;
+	}
+
+	/**
+	 * @return bool
+	 */
+	public function isInHub() : bool{
+		$level = $this->level;
+		$defaultLevel = $this->getServer()->getDefaultLevel();
+		$notInArena = $this->currentArena === null;
+		return $defaultLevel !== null ? $level->getName() === $defaultLevel->getName() && $notInArena : $notInArena;
+	}
+
+	/**
+	 * Generally updates the player within the task.
+	 */
+	public function update() : void{
+
+		if(!$this->throwPearl){
+			$this->removeSecInThrow();
+			if($this->secsEnderpearl <= 0) $this->setThrowPearl();
+		}
+
+		if(!$this->eatGap){
+			$this->removeSecInGap();
+			if($this->secsGap <= 0) $this->setEatGap();
+		}
+
+		if(!$this->arrCD){
+			$this->removeSecInArr();
+			if($this->secsArr <= 0) $this->setArrowCD();
+		}
+
+		if($this->combat){
+			$this->secsInCombat--;
+			if($this->secsInCombat <= 0){
+				$this->setInCombat(false);
+			}
+		}
+
+		if($this->spam > 0){
+			$this->spam--;
+		}
+
+		if($this->tellSpam > 0)
+			$this->tellSpam--;
+
+		if($this->currentSecond % 5 === 0){
+			$this->getScoreboardInfo()->updatePing($this->getPing());
+		}
+
+		$this->currentSecond++;
+	}
+
+	/**
+	 * Updates the seconds in enderpearl cooldown.
+	 */
+	private function removeSecInThrow() : void{
+		$this->secsEnderpearl--;
+		$maxSecs = 10;
+		$sec = $this->secsEnderpearl;
+		if($sec < 0) $sec = 0;
+		$percent = floatval($this->secsEnderpearl / $maxSecs);
+		if($percent < 0) $percent = 0;
+		$this->getExtensions()->setXpAndProgress($sec, $percent);
+	}
+
+	/**
+	 * Updates the seconds in enderpearl cooldown.
+	 */
+	private function removeSecInGap() : void{
+		$this->secsGap--;
+		$maxSecs = 7;
+		$sec = $this->secsGap;
+		if($sec < 0) $sec = 0;
+		$percent = floatval($this->secsGap / $maxSecs);
+		if($percent < 0) $percent = 0;
+		$this->getExtensions()->setXpAndProgress($sec, $percent);
+	}
+
+	/**
+	 * Updates the seconds in enderpearl cooldown.
+	 */
+	private function removeSecInArr() : void{
+		$this->secsArr--;
+		$maxSecs = 10;
+		$sec = $this->secsArr;
+		if($sec < 0) $sec = 0;
+		$percent = floatval($this->secsArr / $maxSecs);
+		if($percent < 0) $percent = 0;
+		$this->getExtensions()->setXpAndProgress($sec, $percent);
+	}
+
+	/**
+	 * @param bool $arrow
+	 * @param bool $message
+	 */
+	public function setArrowCD(bool $arrow = true, bool $message = true) : void{
+
+		$language = $this->getLanguageInfo()->getLanguage();
+
+		if(!$arrow){
+
+			$this->secsArr = 10;
+			$this->getExtensions()->setXpAndProgress(10, 1.0);
+
+			$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $language->generalMessage(Language::SET_IN_ARROWCOOLDOWN);
+
+			if($message && $this->arrCD){
+				$this->sendMessage($msg);
+			}
+		}else{
+
+			$this->secsArr = 0;
+			$this->getExtensions()->setXpAndProgress(0, 0.0);
+
+			$give = true;
+
+			if($this->getArena() !== null && $this->getArena()->getName() === 'OITC'){
+				foreach($this->getInventory()->getContents() as $item){
+					if($item->getId() === 262){
+						$give = false;
+						break;
+					}
+				}
+			}elseif($this->getPartyEvent() instanceof PartyGames){
+				foreach($this->getInventory()->getContents() as $item){
+					if($item->getId() === 262){
+						$give = false;
+						break;
+					}
+				}
+			}else{
+				$give = false;
+			}
+
+			if($give) $this->getInventory()->addItem(Item::get(262));
+
+			$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $language->generalMessage(Language::REMOVE_FROM_ARROWCOOLDOWN);
+
+			if($message && !$this->arrCD){
+				$this->sendMessage($msg);
+			}
+		}
+
+		$this->arrCD = $arrow;
+	}
+
+	/**
+	 * @return FFAArena|null
+	 */
+	public function getArena() : ?FFAArena{
+		return $this->currentArena;
+	}
+
+	/**
+	 * @return PartyEvent|null
+	 *
+	 */
+	public function getPartyEvent() : ?PartyEvent{
+		$eventManager = MineceitCore::getPartyManager()->getEventManager();
+		$currentParty = $this->getParty();
+		if($currentParty === null){
+			return null;
+		}
+		return $eventManager->getPartyEvent($currentParty);
+	}
+
+	/**
+	 * @return MineceitParty|null
+	 *
+	 */
+	public function getParty() : ?MineceitParty{
+		$partyManager = MineceitCore::getPartyManager();
+		return $partyManager->getPartyFromPlayer($this);
+	}
+
+	/**
+	 * @param bool $combat
+	 * @param bool $sendMessage
+	 */
+	public function setInCombat(bool $combat = true, bool $sendMessage = true) : void{
+
+		$language = $this->getLanguageInfo()->getLanguage();
+
+		if($combat){
+			$this->secsInCombat = 10;
+			$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $language->generalMessage(Language::SET_IN_COMBAT);
+			if(!$this->combat && $sendMessage){
+				$this->setCombatNameTag();
+				$this->sendMessage($msg);
+			}
+		}else{
+			$this->secsInCombat = 0;
+			$msg = MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $language->generalMessage(Language::REMOVE_FROM_COMBAT);
+			if($this->combat && $sendMessage){
+				$this->sendMessage($msg);
+			}
+			if($this->hasTarget()) $this->setnoTarget();
+		}
+
+		$this->combat = $combat;
+	}
+
+	public function setnoTarget() : void{
+		$this->target = null;
+		$this->setNormalNameTag();
+		if($this->isOnline() && $this->hasTarget()){
+			$target = $this->getTarget();
+			if($target !== null && $target->isOnline()) $target->setnoTarget();
+		}
+	}
+
+	public function hasTarget() : bool{
+		return $this->target !== null;
+	}
+
+	public function getTarget() : ?Player{
+		return Server::getInstance()->getPlayerExact((string) $this->target);
+	}
+
+	/**
+	 * @return ScoreboardInfo|null
+	 *
+	 * Gets the player's scoreboard information.
+	 */
+	public function getScoreboardInfo() : ?ScoreboardInfo{
+		$this->scoreboardInfo = $this->scoreboardInfo ?? new ScoreboardInfo($this);
+		return $this->scoreboardInfo;
+	}
+
+	public function setTarget(string $player) : void{
+		$this->target = $player;
+	}
+
+	/**
+	 * Updates the cps of the player.
+	 */
+	public function updateCps() : void{
+		$this->getClicksInfo()->updateCPS();
+	}
+
+	/**
+	 * Sets the player in normal spam.
+	 */
+	public function setInSpam() : void{
+		$this->spam = 5;
+	}
+
+	/**
+	 * Sets the player in tell spam.
+	 */
+	public function setInTellSpam() : void{
+		$this->tellSpam = 5;
+	}
+
+	/**
+	 *
+	 * @param bool $command
+	 *
+	 * @return bool
+	 */
+	public function canChat(bool $command = false) : bool{
+
+		$spam = $command ? $this->tellSpam : $this->spam;
+		if($spam > 0 || $this->isMuted()){
+			if(!$this->hasHelperPermissions()){
+				$lang = $this->getLanguageInfo()->getLanguage();
+				$msg = null;
+				if($spam > 0){
+					$msg = $lang->getMessage(Language::NO_SPAM);
+				}elseif($this->isMuted()){
+					$this->sendPopup($lang->getMessage(Language::MUTED));
+				}
+				if($msg !== null){
+					$this->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $msg);
+				}
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player is muted or not.
+	 */
+	public function isMuted() : bool{
+		return $this->muted;
+	}
+
+	/**
+	 * @param bool $muted
+	 *
+	 * Sets the player as muted.
+	 */
+	public function setMuted(bool $muted) : void{
+		if($muted !== $this->muted){
+			$lang = $this->getLanguageInfo()->getLanguage();
+			if($muted){
+				$this->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $lang->getMessage(Language::PLAYER_SET_MUTED));
+			}else{
+				$this->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . $lang->getMessage(Language::PLAYER_SET_UNMUTED));
+			}
+		}
+		$this->muted = $muted;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player has helper permissions.
+	 */
+	public function hasHelperPermissions() : bool{
+
+		foreach($this->ranks as $rank){
+			if($rank->getPermission() === Rank::PERMISSION_HELPER || $rank->getPermission() === Rank::PERMISSION_MOD || $rank->getPermission() === Rank::PERMISSION_ADMIN || $rank->getPermission() === Rank::PERMISSION_OWNER){
+				return true;
+			}
+		}
+
+		return $this->isOp();
+	}
+
+	/**
+	 * @return bool
+	 */
+	public function canThrowPearl() : bool{
+		return $this->throwPearl;
+	}
+
+	/**
+	 * @return bool
+	 */
+	public function canEatGap() : bool{
+		return $this->eatGap;
+	}
+
+	/**
+	 * @return bool
+	 */
+	public function isInCombat() : bool{
+		return $this->combat;
+	}
+
+	public function respawn() : void{
+		parent::respawn();
+		if($this->getSettingsInfo()->isAutoRespawnEnabled() && $this->isInArena()){
+			$arena = MineceitCore::getArenas()->getArena($this->getArena()->getName());
+			$this->teleportToFFAArena($arena, false);
+			$this->dead = false;
+			return;
+		}
+
+		$this->currentArena = null;
+		if($this->getExtensions()->isSpectator()){
+			$this->getExtensions()->setFakeSpectator(false);
+		}
+
+		if($this->isFlying()){
+			$this->setFlying(false);
+		}
+
+		if($this->getScoreboardInfo()->getScoreboardType() !== Scoreboard::SCOREBOARD_NONE){
+			$this->getScoreboardInfo()->setScoreboard(Scoreboard::SCOREBOARD_SPAWN);
+		}
+		$level = $this->getServer()->getDefaultLevel();
+		if($level !== null){
+			$pos = $level->getSpawnLocation();
+			$this->teleport($pos);
+		}
+		MineceitCore::getItemHandler()->spawnHubItems($this, true);
+		$this->dead = false;
+		$this->setAllowFlight($this->canFlyInLobby());
+	}
+
+	/**
+	 * @return bool
+	 */
+	public function isInArena() : bool{
+		return $this->currentArena !== null;
+	}
+
+	/**
+	 * @param string|FFAArena $arena
+	 * @param bool            $message
+	 *
+	 * @return bool
+	 *
+	 * Teleports the player to the ffa arena.
+	 */
+	public function teleportToFFAArena($arena, bool $message = true) : bool{
+		if($this->isFrozen() || $this->isInEvent()){
+			return false;
+		}
+
+		$arenaHandler = MineceitCore::getArenas();
+		$arena = ($arena instanceof FFAArena) ? $arena : $arenaHandler->getArena($arena);
+
+		if($arena !== null && $arena instanceof FFAArena && $arena->isOpen()){
+
+			$this->getExtensions()->enableFlying(false);
+			$this->currentArena = $arena;
+
+			$inventory = $this->getInventory();
+			$armorInv = $this->getArmorInventory();
+
+			$inventory->clearAll();
+			$armorInv->clearAll();
+
+			$arena->teleportPlayer($this, $message);
+
+			$scoreboardInfo = $this->getScoreboardInfo();
+			if($scoreboardInfo->getScoreboardType() !== Scoreboard::SCOREBOARD_NONE){
+				$scoreboardInfo->setScoreboard(Scoreboard::SCOREBOARD_FFA);
+			}
+
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * @return bool
+	 * Used to determine if player is getting ssed or not.
+	 */
+	public function isFrozen() : bool{
+		return $this->frozen;
+	}
+
+	/**
+	 * @param bool $frozen
+	 * Used for /freeze to not get confused for immobile.
+	 */
+	public function setFrozen(bool $frozen = false) : void{
+		$this->setImmobile($frozen);
+		$this->frozen = $frozen;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player is in an event.
+	 */
+	public function isInEvent() : bool{
+		$eventManager = MineceitCore::getEventManager();
+		return $eventManager->getEventFromPlayer($this) !== null;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines whether the player can fly in the lobby.
+	 */
+	public function canFlyInLobby() : bool{
+		return $this->hasBuilderPermissions() || $this->hasHelperPermissions();
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player has helper permissions.
+	 */
+	public function hasBuilderPermissions() : bool{
+
+		foreach($this->ranks as $rank){
+			if($rank->getPermission() === Rank::PERMISSION_BUILDER || $rank->getPermission() === Rank::PERMISSION_ADMIN || $rank->getPermission() === Rank::PERMISSION_OWNER){
+				return true;
+			}
+		}
+
+		return $this->isOp();
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player has vip permissions.
+	 */
+	public function hasVipPermissions() : bool{
+
+		foreach($this->ranks as $rank){
+			if($rank->getPermission() === Rank::PERMISSION_VIP || $rank->getPermission() === Rank::PERMISSION_VIPPL || $rank->getPermission() === Rank::PERMISSION_CONTENT_CREATOR){
+				return true;
+			}
+		}
+
+		return $this->isOp();
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player has vipplus permissions.
+	 */
+	public function hasVipPlusPermissions() : bool{
+
+		foreach($this->ranks as $rank){
+			if($rank->getPermission() === Rank::PERMISSION_VIPPL || $rank->getPermission() === Rank::PERMISSION_CONTENT_CREATOR){
+				return true;
+			}
+		}
+
+		return $this->isOp();
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player has creator permissions.
+	 */
+	public function hasCreatorPermissions() : bool{
+
+		foreach($this->ranks as $rank){
+			if($rank->getPermission() === Rank::PERMISSION_CONTENT_CREATOR){
+				return true;
+			}
+		}
+
+		return $this->isOp();
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player has owner permissions.
+	 */
+	public function hasOwnerPermissions() : bool{
+
+		foreach($this->ranks as $rank){
+			if($rank->getPermission() === Rank::PERMISSION_OWNER){
+				return true;
+			}
+		}
+
+		return $this->isOp();
+	}
+
+	/**
+	 * Occurs when players die.
+	 */
+	public function onDeath() : void{
+
+		if(!$this->dead){
+
+			$this->dead = true;
+			$ev = new PlayerDeathEvent($this, $this->getDrops(), null, $this->getXpDropAmount());
+			$ev->call();
+
+			$this->setThrowPearl(true, false);
+			$this->setEatGap(true, false);
+			$this->setArrowCD(true, false);
+
+			$cause = $this->getLastDamageCause();
+
+			$addDeath = false;
+
+			$duel = MineceitCore::getDuelHandler()->getDuel($this);
+			$party = $this->getPartyEvent();
+			$bot = MineceitCore::getBotHandler()->getDuel($this);
+			$event = MineceitCore::getEventManager()->getEventFromPlayer($this);
+
+			$skip = false;
+
+			if($cause !== null){
+
+				$causeAction = $cause->getCause();
+
+				if($causeAction === EntityDamageEvent::CAUSE_SUICIDE
+					|| $causeAction === EntityDamageEvent::CAUSE_VOID
+					|| $causeAction === EntityDamageEvent::CAUSE_LAVA
+					|| $causeAction === EntityDamageEvent::CAUSE_DROWNING
+					|| $causeAction === EntityDamageEvent::CAUSE_SUFFOCATION
+					|| $causeAction === EntityDamageEvent::CAUSE_FIRE
+					|| $causeAction === EntityDamageEvent::CAUSE_FIRE_TICK){
+
+					if($duel !== null){
+						$duel->setEnded($duel->getOpponent($this));
+						$skip = true;
+					}elseif($bot !== null){
+						$bot->setEnded(false);
+						$skip = true;
+					}elseif($this->isInEventDuel()){
+						$eventDuel = $event->getCurrentDuel();
+						$eventDuel->setResults();
+						$skip = true;
+					}elseif($party !== null){
+						if($party instanceof PartyDuel || $party instanceof PartyGames){
+							$party->addSpectator($this);
+							$skip = true;
+						}
+					}
+				}
+
+				if(!$skip){
+
+					$duelWinner = null;
+
+					if($cause instanceof EntityDamageByEntityEvent){
+
+						$killer = $cause->getDamager();
+
+						if($killer !== null){
+							if($killer instanceof MineceitPlayer){
+								$killer->setThrowPearl(true, false);
+								$killer->setEatGap(true, false);
+								$killer->setArrowCD(true, false);
+								if($this->isInArena() && $this->hasTarget()){
+									if($killer->getArena() !== null && $killer->getArena()->getName() === $this->getArena()->getName()){
+										$this->setInCombat(false, false);
+										$killer->setInCombat(false, false);
+
+										$this->sendMessage(TextFormat::LIGHT_PURPLE . $this->getDisplayName() . TextFormat::GRAY . ' was killed by ' . TextFormat::LIGHT_PURPLE . $killer->getDisplayName());
+										$killer->sendMessage(TextFormat::LIGHT_PURPLE . $this->getDisplayName() . TextFormat::GRAY . ' was killed by ' . TextFormat::LIGHT_PURPLE . $killer->getDisplayName());
+
+										if(($kit = $killer->getArena()->getKit()) != null){
+											$killer->getExtensions()->clearAll();
+											$killer->getKitHolder()->setKit($kit);
+										}
+
+										$killer->getStatsInfo()->addKill();
+										$killer->getStatsInfo()->addCoins(rand(1, 10));
+										$killer->getStatsInfo()->addExp(rand(1, 10));
+										$addDeath = true;
+
+										if($killer->getSettingsInfo()->isAutoGGEnabled()){
+											$format = MineceitCore::getRankHandler()->formatRanksForChat($killer);
+											$killer->sendMessage($format . ' gg');
+											$this->sendMessage($format . ' gg');
+										}
+									}
+								}elseif($duel !== null && $duel->isPlayer($killer)){
+									$duelWinner = $killer;
+								}elseif($this->isInEventDuel() && $event->getCurrentDuel()->isPlayer($killer)){
+									$duelWinner = $killer;
+								}elseif($this->isInEventBoss()){
+									$event->getCurrentBoss()->setEliminated($this);
+								}elseif($party !== null && ($party instanceof PartyDuel || $party instanceof PartyGames)){
+									$party->addSpectator($this);
+								}
+							}elseif($killer instanceof AbstractCombatBot && $bot !== null){
+								$bot->setEnded(false);
+							}
+						}
+					}elseif($cause instanceof EntityDamageByChildEntityEvent){
+
+						$killer = $cause->getDamager();
+
+						if($killer !== null && $killer instanceof MineceitPlayer){
+							if($duel !== null && $duel->isPlayer($killer)){
+								$duelWinner = $killer;
+							}elseif($party !== null && ($party instanceof PartyDuel || $party instanceof PartyGames)){
+								$party->addSpectator($this);
+							}
+						}
+					}
+
+					if($duel !== null && $duelWinner !== null){
+						$duel->setEnded($duelWinner);
+
+						if($this->hasAdminPermissions() && $duel->isRanked()) $duelWinner->setValidTags(TextFormat::BOLD . TextFormat::DARK_RED . 'X' . TextFormat::RED . 'O' . TextFormat::GOLD . 'O' . TextFormat::YELLOW . 'P' . TextFormat::GREEN . 'E' . TextFormat::DARK_GREEN . 'R' . TextFormat::AQUA . 'M' . TextFormat::DARK_AQUA . 'A' . TextFormat::BLUE . 'N');
+
+						$duelWinner->getStatsInfo()->addCoins(rand(5, 15));
+						$duelWinner->getStatsInfo()->addExp(rand(5, 15));
+						$duelWinner->getStatsInfo()->addKill();
+						$addDeath = true;
+
+						if($duelWinner->getSettingsInfo()->isAutoGGEnabled()){
+							$format = MineceitCore::getRankHandler()->formatRanksForChat($duelWinner);
+							$duelWinner->sendMessage($format . ' gg');
+							$this->sendMessage($format . ' gg');
+						}
+					}elseif($this->isInEventDuel() && $duelWinner !== null){
+						$event->getCurrentDuel()->setResults($duelWinner);
+					}
+
+					if($addDeath){
+						$this->getStatsInfo()->addDeath();
+						$this->getStatsInfo()->addExp(rand(1, 5));
+					}
+				}
+			}
+
+			$this->dead = false;
+			$this->getExtensions()->setXpAndProgress(0, 0.0);
+			$this->doCloseInventory();
+
+		}
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player is in an event duel.
+	 */
+	public function isInEventDuel() : bool{
+		if($this->isInEvent()){
+			$eventManager = MineceitCore::getEventManager();
+			$event = $eventManager->getEventFromPlayer($this);
+			return ($duel = $event->getCurrentDuel()) !== null && $duel->isPlayer($this);
+		}
+		return false;
+	}
+
+	/**
+	 * @return PlayerKitHolder|KitHolder|null
+	 *
+	 * Gets the kit holder info.
+	 */
+	public function getKitHolder() : ?KitHolder{
+		$this->kitHolderInfo = $this->kitHolderInfo ?? new PlayerKitHolder($this);
+		return $this->kitHolderInfo;
+	}
+
+	/**
+	 * @return StatsInfo|null
+	 * Gets the general stats info of the player.
+	 */
+	public function getStatsInfo() : ?StatsInfo{
+		$this->statsInfo = $this->statsInfo ?? new StatsInfo($this);
+		return $this->statsInfo;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player is in an event boss.
+	 */
+	public function isInEventBoss() : bool{
+		if($this->isInEvent()){
+			$eventManager = MineceitCore::getEventManager();
+			$event = $eventManager->getEventFromPlayer($this);
+			return ($boss = $event->getCurrentBoss()) !== null && $boss->isPlayer($this);
+		}
+		return false;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player has admin permissions.
+	 */
+	public function hasAdminPermissions() : bool{
+
+		foreach($this->ranks as $rank){
+			if($rank->getPermission() === Rank::PERMISSION_ADMIN || $rank->getPermission() === Rank::PERMISSION_OWNER){
+				return true;
+			}
+		}
+
+		return $this->isOp();
+	}
+
+	/**
+	 * @return bool
+	 */
+	public function isInQueue() : bool{
+		$duelHandler = MineceitCore::getDuelHandler();
+		return $duelHandler->isInQueue($this);
+	}
+
+	public function isInBot() : bool{
+		$duelHandler = MineceitCore::getBotHandler();
+		$duel = $duelHandler->getDuel($this);
+		return $duel !== null;
+	}
+
+	/**
+	 * @param DuelInfo $winner
+	 * @param DuelInfo $loser
+	 * @param bool     $draw
+	 */
+	public function addToDuelHistory(DuelInfo $winner, DuelInfo $loser, bool $draw = false) : void{
+		$this->duelHistory[] = ['winner' => $winner, 'loser' => $loser, 'draw' => $draw];
+	}
+
+	/**
+	 * @param DuelReplayInfo $info
+	 */
+	public function addReplayDataToDuelHistory(DuelReplayInfo $info) : void{
+		$length = count($this->duelHistory);
+		if($length <= 0){
+			return;
+		}
+		$lastIndex = $length - 1;
+		$this->duelHistory[$lastIndex]['replay'] = $info;
+	}
+
+	/**
+	 * @param int $id
+	 *
+	 * @return array|null
+	 */
+	public function getDuelInfo(int $id) : ?array{
+
+		$result = null;
+
+		if(isset($this->duelHistory[$id])){
+			$result = $this->duelHistory[$id];
+		}
+
+		return $result;
+	}
+
+	/**
+	 * @return array
+	 */
+	public function getDuelHistory() : array{
+		return $this->duelHistory;
+	}
+
+	/**
+	 * @param int $seconds
+	 *
+	 * Sets the player on fire.
+	 */
+	public function setOnFire(int $seconds) : void{
+		parent::setOnFire($seconds);
+
+		if(($duel = MineceitCore::getDuelHandler()->getDuel($this)) !== null){
+			$duel->setOnFire($this, $seconds);
+		}
+	}
+
+	public function consumeObject(Consumable $consumable) : bool{
+		$drink = $consumable instanceof Potion;
+
+		if(($duel = MineceitCore::getDuelHandler()->getDuel($this)) !== null){
+			$duel->setConsumeFor($this, $drink);
+		}
+
+		return parent::consumeObject($consumable);
+	}
+
+	public function addEffect(EffectInstance $effect) : bool{
+		if(($duel = MineceitCore::getDuelHandler()->getDuel($this)) !== null){
+			$duel->setEffectFor($this, $effect);
+		}
+		return parent::addEffect($effect);
+	}
+
+	/**
+	 * @return bool
+	 */
+	public function isWatchingReplay() : bool{
+		$replayManager = MineceitCore::getReplayManager();
+		return $replayManager->getReplayFrom($this) !== null;
+	}
+
+	/**
+	 * @param Item $item
+	 *
+	 * @return bool
+	 */
+	public function dropItem(Item $item) : bool{
+		if(!$this->spawned || !$this->isAlive()){
+			return false;
+		}
+
+		if($item->isNull()){
+			$this->server->getLogger()->debug($this->getName() . " attempted to drop a null item (" . $item . ")");
+			return true;
+		}
+
+		$motion = $this->getDirectionVector()->multiply(0.4);
+
+		$this->level->dropItem($this->add(0, 1.3, 0), $item, $motion, 40);
+
+		if(($duel = MineceitCore::getDuelHandler()->getDuel($this)) !== null){
+			$duel->setDropItem($this, $item, $motion);
+		}
+
+		return true;
+	}
+
+	/**
+	 * @param bool $value
+	 */
+	public function setSneaking(bool $value = true) : void{
+		parent::setSneaking($value);
+		if(($duel = MineceitCore::getDuelHandler()->getDuel($this)) !== null){
+			$duel->setSneakingFor($this, $value);
+		}
+	}
+
+	/* public function knockBack(Entity $attacker, float $damage, float $x, float $z, float $base = 0.4): void
+	{
+		$xzKb = $base;
+		$yKb = $base;
+
+		$f = sqrt($x * $x + $z * $z);
+
+		if ($f <= 0) return;
+
+		if (mt_rand() / mt_getrandmax() > $this->getAttributeMap()->getAttribute(Attribute::KNOCKBACK_RESISTANCE)->getValue()) {
+
+			if($attacker instanceof Player){
+				$attackerKit = $attacker->getKitHolder()->getKit();
+				$knockbackInfo = $attackerKit->getKnockbackInfo();
+				$xzKb = $knockbackInfo->getHorizontalKb();
+				$yKb = $knockbackInfo->getVerticalKb();
+			}
+
+			$f = 1 / $f;
+
+			$motion = clone $this->motion;
+
+			$motion->x /= 2;
+			$motion->y /= 2;
+			$motion->z /= 2;
+			$motion->x += $x * $f * $xzKb;
+			$motion->y += $yKb;
+			$motion->z += $z * $f * $xzKb;
+
+			if ($motion->y > $yKb) {
+				$motion->y = $yKb;
+			}
+
+			$this->setMotion($motion);
+		}
+	} */
+
+	/**
+	 * Gets the information of the player.
+	 *
+	 * @param Language|null $lang
+	 *
+	 * @return array|string[]
+	 */
+	public function getInfo(Language $lang = null) : array{
+
+		$levelName = $this->level->getName();
+		$pRanks = $this->getRanks();
+
+		$ranks = [];
+		$locale = $lang != null ? $lang->getLocale() : null;
+
+		foreach($pRanks as $rank){
+			$ranks[] = $rank->getName();
+		}
+
+		$ranksStr = implode(", ", $ranks);
+		if(strlen($ranksStr) <= 0){
+			$ranksStr = $lang->getMessage(Language::NONE);
+		}
+
+		//$aliases = $this->getAliases();
+
+		$disguiseInfo = $this->getDisguiseInfo();
+		return [
+			"Name" => $this->getName() . ($disguiseInfo->isDisguised()
+					? " (Disguise -> {$disguiseInfo->getDisguiseData()->getDisplayName()})" : ""),
+			"IP" => $this->getAddress(),
+			"Ping" => $this->getPing(),
+			"Version" => $this->getClientInfo()->getVersion(),
+			"Device OS" => $this->getClientInfo()->getDeviceOS(true),
+			"Device Model" => $this->getClientInfo()->getDeviceModel(),
+			"Device ID" => $this->getClientInfo()->getRawDeviceId(),
+			"UI" => $this->getClientInfo()->getUIProfile(),
+			"Ranks" => $ranksStr,
+			"Controls" => $this->getClientInfo()->getInputAtLogin(true),
+			//"Aliases" => implode(", ", $aliases),
+			"Level" => $levelName,
+			"Language" => $this->getLanguageInfo()->getLanguage()
+				->getNameFromLocale($locale ?? Language::ENGLISH_US),
+			"Guild:" => $this->getGuild() . " ({$this->getGuildRegion()})",
+			"Coins" => $this->getStatsInfo()->getCoins(),
+			"Shard" => $this->getStatsInfo()->getShards(),
+			"Exp" => $this->getStatsInfo()->getExp(),
+			"Battlepass" => $this->isBuyBattlePass() ? "ElitePass" : "Free",
+		];
+	}
+
+	/**
+	 *
+	 * Gets the ranks of the player.
+	 *
+	 * @param bool $asString
+	 *
+	 * @return array|Rank[]|string[]
+	 */
+	public function getRanks(bool $asString = false) : array{
+
+		if($asString){
+
+			$ranks = [];
+
+			foreach($this->ranks as $rank)
+				$ranks[] = $rank->getLocalName();
+
+			return $ranks;
+		}
+
+		return $this->ranks;
+	}
+
+	/**
+	 * Sets the ranks of the player.
+	 *
+	 * @param array|Rank[] $ranks
+	 */
+	public function setRanks($ranks = []) : void{
+
+		$size = count($ranks);
+
+		if($size > 0){
+
+			$this->ranks = $ranks;
+			$this->claimRewards();
+		}
+	}
+
+	/**
+	 * @return DisguiseInfo|null
+	 * Gets the disguise info for the player.
+	 */
+	public function getDisguiseInfo() : ?DisguiseInfo{
+		$this->disguiseInfo = $this->disguiseInfo ?? new DisguiseInfo($this);
+		return $this->disguiseInfo;
+	}
+
+	/**
+	 * @return string $guild
+	 */
+	public function getGuild() : string{
+		return $this->guild;
+	}
+
+	/**
+	 * @param string $guildName
+	 */
+	public function setGuild(string $guildName) : void{
+		$this->guild = $guildName;
+	}
+
+	/**
+	 * @return string $guild
+	 */
+	public function getGuildRegion() : string{
+		return $this->guildRegion;
+	}
+
+	/**
+	 * @param string $region
+	 */
+	public function setGuildRegion(string $region) : void{
+		$this->guildRegion = $region;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Is the buy bp notification enabled.
+	 */
+	public function isBuyBattlePass() : bool{
+		return $this->isbuybp;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines whether the player can build.
+	 */
+	public function canBuild() : bool{
+		return $this->hasBuilderPermissions()
+			&& $this->getSettingsInfo()->getBuilderModeInfo()->canBuild();
+	}
+
+	/**
+	 * @return int
+	 *
+	 * Gets the report permissions of the players.
+	 */
+	public function getReportPermissions() : int{
+
+		if($this->hasModPermissions()){
+			return ReportInfo::PERMISSION_MANAGE_REPORTS;
+		}elseif($this->hasHelperPermissions()){
+			return ReportInfo::PERMISSION_VIEW_ALL_REPORTS;
+		}
+
+		return ReportInfo::PERMISSION_NORMAL;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player has mod permissions.
+	 */
+	public function hasModPermissions() : bool{
+
+		foreach($this->ranks as $rank){
+			if($rank->getPermission() === Rank::PERMISSION_MOD || $rank->getPermission() === Rank::PERMISSION_ADMIN || $rank->getPermission() === Rank::PERMISSION_OWNER){
+				return true;
+			}
+		}
+
+		return $this->isOp();
+	}
+
+	/**
+	 * Removes the rank of a player.
+	 *
+	 * @param string $rank
+	 */
+	public function removeRank(string $rank) : void{
+
+		$keys = array_keys($this->ranks);
+
+		foreach($keys as $key){
+
+			$theRank = $this->ranks[$key];
+
+			if($theRank->getLocalName() === $rank){
+				unset($this->ranks[$key]);
+				break;
+			}
+		}
+
+		if(!$this->canFlyInLobby() && $this->getAllowFlight()){
+			$this->getExtensions()->enableFlying(false);
+		}
+	}
+
+	/**
+	 *
+	 * Gets the bpclaimed of the player.
+	 *
+	 *
+	 * @return array|string[]
+	 */
+	public function getBpClaimed() : array{
+		return $this->bpclaimed;
+	}
+
+	/**
+	 * Sets the bpclaimed of the player.
+	 *
+	 * @param int $n
+	 */
+	public function setBpClaimed(int $n) : void{
+		# $this->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You recive Battle Pass reward : ' . TextFormat::LIGHT_PURPLE . $n);
+		$this->bpclaimed[$n] = '1';
+	}
+
+	/**
+	 * Is the bpclaimed of the player.
+	 *
+	 * @param int $n
+	 *
+	 * @return bool
+	 */
+	public function isBpClaimed(int $n) : bool{
+		if(isset($this->bpclaimed[$n]))
+			return $this->bpclaimed[$n] === '1';
+		return false;
+	}
+
+	/**
+	 * @return array
+	 *
+	 * Gets the aliases of the player.
+	 */
+	public function getAliases() : array{
+		$playerHandler = MineceitCore::getPlayerHandler();
+		$aliasManager = $playerHandler->getAliasManager();
+		return $aliasManager->getAliases($this);
+	}
+
+	/**
+	 * @param bool $enabled
+	 *
+	 * Enables/Disables the buy bp notification.
+	 */
+	public function setBuyBattlePass(bool $enabled) : void{
+		$this->isbuybp = $enabled;
+	}
+
+	/**
+	 * @param bool $enabled
+	 *
+	 * Enables/Disables the join and leave for staff notification.
+	 */
+	public function setSilentStaffEnabled(bool $enabled) : void{
+		$this->silentStaff = $enabled;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Is the join and leave for staff notification enabled.
+	 */
+	public function isSilentStaffEnabled() : bool{
+		return $this->silentStaff;
+	}
+
+	/**
+	 * @param array               $items
+	 * @param int                 $price
+	 * @param string              $type
+	 * @param MineceitPlayer|null $gift
+	 *
+	 * Gacha box function
+	 */
+	public function gachaBox(array $items, int $price, string $type, MineceitPlayer $gift = null) : void{
+		if($this->getStatsInfo()->getCoins() >= $price){
+
+			$already = false;
+
+			$reward = null;
+			$range = 0;
+			foreach($items as $item)
+				$range = $range + $item[1];
+
+			$percents = rand(1, $range);
+			$gacha = 0;
+
+			foreach($items as $item){
+				if($percents > $gacha && $percents <= $gacha + $item[1]){
+					$reward = $item[0];
+					$percents = $item[1];
+					break;
+				}
+				$gacha = $gacha + $item[1];
+			}
+
+			if(is_string($reward)){
+
+				$giftmsg = null;
+
+				if($gift !== null){
+					$gift->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' ' . $this->getDisplayName() . ' sent you a gift.');
+				}
+
+				switch($type){
+					case "tag":
+						if($gift === null){
+							if(array_search($reward, $this->getValidTags()) !== false){
+								$this->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You already got ' . TextFormat::LIGHT_PURPLE . $reward);
+								$already = true;
+							}else{
+								$this->setValidTags((string) $reward);
+							}
+						}else{
+							if(array_search($reward, $gift->getValidTags()) !== false){
+								$gift->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You already got ' . TextFormat::LIGHT_PURPLE . $reward);
+								$already = true;
+							}else{
+								$gift->setValidTags((string) $reward);
+							}
+						}
+						break;
+					case "cape":
+						if($gift === null){
+							if(array_search($reward, $this->getValidCapes()) !== false){
+								$this->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You already got ' . TextFormat::LIGHT_PURPLE . $reward);
+								$already = true;
+							}else{
+								$this->setValidCapes($reward);
+							}
+						}else{
+							if(array_search($reward, $gift->getValidCapes()) !== false){
+								$gift->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You already got ' . TextFormat::LIGHT_PURPLE . $reward);
+								$already = true;
+							}else{
+								$gift->setValidCapes($reward);
+							}
+						}
+						break;
+					case "artifact":
+						if($gift === null){
+							if(array_search($reward, $this->getValidStuffs()) !== false){
+								$this->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You already got ' . TextFormat::LIGHT_PURPLE . $reward);
+								$already = true;
+							}else{
+								$this->setValidStuffs($reward);
+							}
+						}else{
+							if(array_search($reward, $gift->getValidStuffs()) !== false){
+								$gift->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You already got ' . TextFormat::LIGHT_PURPLE . $reward);
+								$already = true;
+							}else{
+								$gift->setValidStuffs($reward);
+							}
+						}
+						break;
+				}
+
+				if($gift !== null) $this->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . " {$gift->getDisplayName()} got " . TextFormat::LIGHT_PURPLE . $reward);
+				if(($percents / $range) * 100 <= 5){
+					$name = ($gift === null) ? $this->getDisplayName() : $gift->getDisplayName();
+					MineceitUtil::broadcastMessage(TextFormat::LIGHT_PURPLE . $name . TextFormat::GOLD . " has obtained a rare $type " . TextFormat::LIGHT_PURPLE . $reward);
+				}
+			}
+
+			$this->getStatsInfo()->removeCoins($price);
+			if($already) $this->getStatsInfo()->addShards((int) ($price / 2));
+		}else{
+			$this->sendMessage(MineceitUtil::getPrefix() . TextFormat::RED . ' Not enough coin.');
+		}
+	}
+
+	/**
+	 *
+	 * Gets the tags of the player.
+	 *
+	 *
+	 * @return array|string[]
+	 */
+	public function getValidTags() : array{
+		return $this->validtags;
+	}
+
+	/**
+	 * Sets the tag of the player.
+	 *
+	 * @param string $tag
+	 */
+	public function setValidTags(string $tag) : void{
+		$key = array_search($tag, $this->validtags);
+		if($key === false){
+			$this->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You got a new tag : ' . $tag);
+			$this->validtags[] = $tag;
+		}
+	}
+
+	/**
+	 *
+	 * Gets the capes of the player.
+	 *
+	 *
+	 * @return array|string[]
+	 */
+	public function getValidCapes() : array{
+		return $this->validcapes;
+	}
+
+	/**
+	 * Sets the cape of the player.
+	 *
+	 * @param string $cape
+	 */
+	public function setValidCapes(string $cape) : void{
+		$key = array_search($cape, $this->validcapes);
+		if($key === false){
+			$this->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You got a new cape : ' . TextFormat::LIGHT_PURPLE . $cape);
+			$this->validcapes[] = $cape;
+		}
+	}
+
+	/**
+	 *
+	 * Gets the stuffs of the player.
+	 *
+	 *
+	 * @return array|string[]
+	 */
+	public function getValidStuffs() : array{
+		return $this->validstuffs;
+	}
+
+	/**
+	 * Sets the stuff of the player.
+	 *
+	 * @param string $stuff
+	 */
+	public function setValidStuffs(string $stuff) : void{
+		$key = array_search($stuff, $this->validstuffs);
+		if($key === false){
+			$this->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You got a new artifacts : ' . TextFormat::LIGHT_PURPLE . $stuff);
+			$this->validstuffs[] = $stuff;
+		}
+	}
+
+	/**
+	 * @param String $item
+	 * @param int    $price
+	 * @param string $type
+	 *
+	 * buy single tag using shard function
+	 */
+	public function BuyShard(string $item, int $price, string $type) : void{
+		if($this->getStatsInfo()->getShards() >= $price){
+
+			$already = false;
+
+			switch($type){
+				case "tag":
+					if(array_search($item, $this->getValidTags()) !== false){
+						$already = true;
+					}else{
+						$this->setValidTags($item);
+					}
+					break;
+				case "cape":
+					if(array_search($item, $this->getValidCapes()) !== false){
+						$already = true;
+					}else{
+						$this->setValidCapes($item);
+					}
+					break;
+				case "artifact":
+					if(array_search($item, $this->getValidStuffs()) !== false){
+						$already = true;
+					}else{
+						$this->setValidStuffs($item);
+					}
+					break;
+			}
+
+			if($already){
+				$this->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You already got ' . $item);
+			}else{
+				$this->getStatsInfo()->removeShards($price);
+			}
+		}else{
+			$this->sendMessage(MineceitUtil::getPrefix() . TextFormat::RED . 'Not enough Shards.');
+		}
+	}
+
+	/**
+	 * @return string
+	 *
+	 */
+	public function getPotColor() : string{
+		return $this->potcolor;
+	}
+
+	/**
+	 * @param string $potcolor
+	 *
+	 * @return string
+	 */
+	public function setPotColor(string $potcolor) : string{
+		return $this->potcolor = $potcolor;
+	}
+
+	/**
+	 * Loads the player's data.
+	 *
+	 * @param array $data
+	 */
+	public function loadData($data = []) : void{
+		// Initializes the stats & elo.
+		$this->getStatsInfo()->init($data);
+		$this->getEloInfo()->init($data);
+		$this->getSettingsInfo()->init($data);
+		$this->getDisguiseInfo()->init($data);
+
+		if(isset($data['muted']))
+			$this->muted = (bool) $data['muted'];
+		if(isset($data['silent-staff']))
+			$this->silentStaff = (bool) $data['silent-staff'];
+
+		if(isset($data['cape']))
+			$this->cape = (string) $data['cape'];
+		if(isset($data['stuff']))
+			$this->stuff = (string) $data['stuff'];
+		if(isset($data['potcolor']))
+			$this->potcolor = (string) $data['potcolor'];
+		if(isset($data['tag']))
+			$this->tag = (string) $data['tag'];
+		if(isset($data['ranks'])){
+			$ranks = $data['ranks'];
+			$size = count($ranks);
+			$rankHandler = MineceitCore::getRankHandler();
+			$result = [];
+			if($size > 0){
+				foreach($ranks as $rankName){
+					$rankName = strval($rankName);
+					$rank = $rankHandler->getRank($rankName);
+					if($rank !== null)
+						$result[] = $rank;
+				}
+			}else{
+				$defaultRank = $rankHandler->getDefaultRank();
+				if($defaultRank !== null)
+					$result = [$defaultRank];
+			}
+			$this->ranks = $result;
+		}
+
+		if(isset($data['validtags'])){
+			$validtags = (string) $data['validtags'];
+
+			$A = explode('|', $validtags);
+			$B = explode(',', $validtags);
+
+			if(count($A) >= count($B)) $this->validtags = $A;
+			else $this->validtags = $B;
+		}
+
+		if(isset($data['validcapes'])){
+			$validcapes = (string) $data['validcapes'];
+			$this->validcapes = explode(',', $validcapes);
+		}
+
+		if(isset($data['validstuffs'])){
+			$validstuffs = (string) $data['validstuffs'];
+			$this->validstuffs = explode(',', $validstuffs);
+		}
+
+		if(isset($data['bpclaimed'])){
+			$bpclaimed = (string) $data['bpclaimed'];
+			$this->bpclaimed = explode(',', $bpclaimed);
+		}
+
+		if(isset($data['isbuybp']))
+			$this->isbuybp = (bool) $data['isbuybp'];
+
+		if(isset($data['guild'])){
+			if((string) $data['guild'] === ',' || (string) $data['guild'] === ''){
+				$this->guildRegion = '';
+				$this->guild = '';
+			}else{
+				$guildData = explode(',', (string) $data['guild']);
+				$this->guildRegion = (string) $guildData[0];
+				$this->guild = (string) $guildData[1];
+			}
+		}
+
+		$this->lastTimeHosted = -1;
+		if(isset($data['lasttimehosted'])){
+			$this->lastTimeHosted = (int) $data['lasttimehosted'];
+		}
+
+		if(MineceitCore::MYSQL_ENABLED){
+			if(isset($data['vote']) && (int) $data['vote'] !== 0){
+				$time = time();
+				if($time > ((int) $data['vote'] + 86400)){
+					foreach($this->ranks as $rank){
+						if($rank->getName() === "Voter"){
+							$this->setRanks([MineceitCore::getRankHandler()->getDefaultRank()]);
+						}
+					}
+					if($this->getTag() === TextFormat::BOLD . TextFormat::DARK_GREEN . 'VOTER') $this->setTag('');
+					if($this->getCape() === 'Z') $this->setCape('');
+					if($this->getStuff() === 'Glasses') $this->setStuff('');
+					$this->removeValidTags(TextFormat::BOLD . TextFormat::DARK_GREEN . 'VOTER');
+					$this->removeValidCapes('Z');
+					$this->removeValidStuffs('Glasses');
+				}
+			}
+		}
+
+		if($this->getSettingsInfo()->isScoreboardEnabled()){
+			$this->getScoreboardInfo()->setScoreboard(Scoreboard::SCOREBOARD_SPAWN);
+		}
+
+		MineceitCore::getItemHandler()->spawnHubItems($this);
+
+		$this->setNormalNameTag();
+
+		$this->setAllowFlight($this->canFlyInLobby());
+
+		if(($msg = MineceitUtil::getJoinMessage($this)) !== '') $this->server->broadcastMessage($msg);
+
+		$this->setImmobile(false);
+
+		$this->setCosmetic();
+
+		$this->getKitHolder()->loadEditedKits();
+
+		$auctionHouse = MineceitCore::getAuctionHouse();
+		if($auctionHouse->isRunning()){
+			$auctionHouse->checkCoinBack($this);
+			$auctionHouse->checkShardBack($this);
+			$auctionHouse->checkItemBack($this);
+		}
+
+		$this->claimRewards();
+		$this->loadedData = true;
+	}
+
+	/**
+	 * @return EloInfo|null
+	 * Gets the elo info of the player.
+	 * Separated elo from the stats because it would be easier to
+	 * abstract the MYSQL Data.
+	 */
+	public function getEloInfo() : ?EloInfo{
+		$this->eloInfo = $this->eloInfo ?? new EloInfo($this);
+		return $this->eloInfo;
+	}
+
+	/**
+	 * @return string
+	 *
+	 */
+	public function getTag() : string{
+		return $this->tag;
+	}
+
+	/**
+	 * @param string $tag
+	 *
+	 * Set player's tag
+	 */
+	public function setTag(string $tag) : void{
+		$this->tag = $tag;
+	}
+
+	/**
+	 * @return string
+	 *
+	 */
+	public function getCape() : string{
+		return $this->cape;
+	}
+
+	/**
+	 * @param string $cape
+	 *
+	 * @return string
+	 */
+	public function setCape(string $cape) : string{
+		return $this->cape = $cape;
+	}
+
+	/**
+	 * @return string
+	 *
+	 */
+	public function getStuff() : string{
+		return $this->stuff;
+	}
+
+	/**
+	 * @param string $stuff
+	 *
+	 * @return string
+	 */
+	public function setStuff(string $stuff) : string{
+		return $this->stuff = $stuff;
+	}
+
+	/**
+	 * Removes the tag of a player.
+	 *
+	 * @param string $tag
+	 */
+	public function removeValidTags(string $tag) : void{
+		$key = array_search($tag, $this->validtags);
+		if($key !== false)
+			unset($this->validtags[$key]);
+	}
+
+	/**
+	 * Removes the cape of a player.
+	 *
+	 * @param string $cape
+	 */
+	public function removeValidCapes(string $cape) : void{
+		$key = array_search($cape, $this->validcapes);
+		if($key !== false)
+			unset($this->validcapes[$key]);
+	}
+
+	/**
+	 * Removes the stuff of a player.
+	 *
+	 * @param string $stuff
+	 */
+	public function removeValidStuffs(string $stuff) : void{
+		$key = array_search($stuff, $this->validstuffs);
+		if($key !== false)
+			unset($this->validstuffs[$key]);
+	}
+
+	/**
+	 *
+	 */
+	public function setCosmetic() : void{
+		$cosmetic = MineceitCore::getCosmeticHandler();
+		if(!$this->getDisguiseInfo()->isDisguised()){
+			if($this->getStuff() !== ""){
+				$cosmetic->setSkin($this, $this->getStuff());
+			}else if($this->getCape() !== ""){
+				$capedata = $cosmetic->getCapeData($this->getCape());
+				$this->setSkin(new Skin($this->getSkin()->getSkinId(), $this->getSkin()->getSkinData(), $capedata, $this->getSkin()->getGeometryName() !== 'geometry.humanoid.customSlim' ? 'geometry.humanoid.custom' : $this->getSkin()->getGeometryName(), ''));
+				$this->sendSkin();
+			}else{
+				$this->setSkin(new Skin($this->getSkin()->getSkinId(), $this->getSkin()->getSkinData(), '', $this->getSkin()->getGeometryName() !== 'geometry.humanoid.customSlim' ? 'geometry.humanoid.custom' : $this->getSkin()->getGeometryName(), ''));
+				$this->sendSkin();
+			}
+		}else{
+			$this->getDisguiseInfo()->setDisguised(true, true);
+		}
+	}
+
+	public function claimRewards(){
+		foreach($this->ranks as $rank){
+			switch($rank){
+				case "Donator":
+					$this->setValidTags(TextFormat::BOLD . TextFormat::LIGHT_PURPLE . 'SUPPORTER');
+					$this->setValidTags(TextFormat::BOLD . TextFormat::RED . 'CONTRIBUTOR');
+					$this->setValidTags(TextFormat::BOLD . TextFormat::LIGHT_PURPLE . 'SUBSCRIBER');
+					$this->setValidCapes('Lunar');
+					$this->setValidStuffs('Adidas');
+					$this->setValidStuffs('Boxing');
+					break;
+				case "DonatorPlus":
+					$this->setValidTags(TextFormat::BOLD . TextFormat::LIGHT_PURPLE . 'SUPPORTER');
+					$this->setValidTags(TextFormat::BOLD . TextFormat::RED . 'CONTRIBUTOR');
+					$this->setValidTags(TextFormat::BOLD . TextFormat::LIGHT_PURPLE . 'SUBSCRIBER');
+					$this->setValidTags(TextFormat::BOLD . TextFormat::RED . 'BEQUEATH');
+					$this->setValidCapes('Lunar');
+					$this->setValidCapes('Galaxy');
+					$this->setValidStuffs('Adidas');
+					$this->setValidStuffs('Boxing');
+					$this->setValidStuffs('Nike');
+					break;
+				case "Booster":
+					$this->setValidTags(TextFormat::BOLD . TextFormat::LIGHT_PURPLE . 'SUBSCRIBER');
+					$this->setValidCapes('Galaxy');
+					$this->setValidStuffs('Nike');
+					break;
+				case "Media":
+				case "Famous":
+					$this->setValidTags(TextFormat::BOLD . TextFormat::LIGHT_PURPLE . 'ZE' . TextFormat::WHITE . 'QA');
+					$this->setValidTags(TextFormat::BOLD . TextFormat::DARK_RED . 'C' . TextFormat::RED . 'L' . TextFormat::GOLD . 'O' . TextFormat::YELLOW . 'U' . TextFormat::GREEN . 'T' . TextFormat::DARK_GREEN . 'E' . TextFormat::AQUA . 'D');
+					$this->setValidCapes('Pepe');
+					$this->setValidStuffs('LouisVuitton');
+					break;
+			}
+
+			if($rank->getName() === "Donator" || $rank->getName() === "DonatorPlus" || $rank->getName() === "Booster"){
+				$time = time();
+				$dailycoins = false;
+				if(MineceitCore::MYSQL_ENABLED){
+					if(isset($data['donate'])){
+						if($time > ((int) $data['donate'] + 86400)){
+							$task = new AsyncSaveDonateVoteData($this, true);
+							$this->server->getAsyncPool()->submitTask($task);
+							$dailycoins = true;
+						}
+					}
+				}else{
+					$donatordata = new Config(MineceitCore::getDataFolderPath() . "donator.yml", Config::YAML);
+					if($time > ($donatordata->get($this->getName()) + 86400)){
+						$donatordata->set($this->getName(), $time);
+						$donatordata->save();
+						$dailycoins = true;
+					}
+				}
+
+				if($dailycoins){
+					switch($rank){
+						case "Donator":
+							$this->getStatsInfo()->addCoins(300);
+							break;
+						case "DonatorPlus":
+							$this->getStatsInfo()->addCoins(500);
+							break;
+						case "Booster":
+							$this->getStatsInfo()->addCoins(100);
+							break;
+					}
+					$this->sendMessage(MineceitUtil::getPrefix() . TextFormat::GRAY . ' You have received ' . TextFormat::YELLOW . 'a daily reward.');
+				}
+			}
+		}
+
+		if($this->hasHelperPermissions() || $this->hasBuilderPermissions()){
+			$this->setValidTags(TextFormat::BOLD . TextFormat::LIGHT_PURPLE . 'ZE' . TextFormat::WHITE . 'QA');
+			$this->setValidCapes('Chimera');
+			$this->setValidStuffs('Gudoudame');
+		}
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines whether the player has loaded their data or not.
+	 */
+	public function hasLoadedData() : bool{
+		return $this->loadedData;
+	}
+
+	/**
+	 * @return int
+	 *
+	 * Gets the last time the player hosted.
+	 */
+	public function getLastTimeHosted() : int{
+		return $this->lastTimeHosted;
+	}
+
+	/**
+	 * @param int $time
+	 *
+	 * Sets the last time the player hosted.
+	 */
+	public function setLastTimeHosted(int $time) : void{
+		$this->lastTimeHosted = $time;
+	}
+
+	/**
+	 * @return array
+	 *
+	 * Gets the follower.
+	 */
+	public function getFollower() : array{
+		$players = [];
+		foreach($this->follower as $name){
+			if(($player = MineceitUtil::getPlayerExact($name, true)) !== null && $player instanceof MineceitPlayer){
+				$players[] = $player;
+			}else{
+				if(isset($this->follower[$name])) unset($this->follower[$name]);
+			}
+		}
+		return $players;
+	}
+
+	/**
+	 * @param string $name
+	 * @param bool   $follow
+	 *
+	 * Sets the follower.
+	 */
+	public function setFollower(string $name = '', bool $follow = true) : void{
+		if($follow) $this->follower[$name] = $name;
+		else{
+			if(isset($this->follower[$name])) unset($this->follower[$name]);
+		}
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Gets the followed.
+	 */
+	public function isFollowed() : bool{
+		return count($this->follower) !== 0;
+	}
+
+	/**
+	 * @return string
+	 *
+	 * Gets the followed.
+	 */
+	public function getFollowing() : string{
+		return $this->following;
+	}
+
+	/**
+	 * @param string $name
+	 *
+	 * Sets the followed.
+	 */
+	public function setFollowing(string $name = '') : void{
+		if($name === ''){
+			$this->reset(true, true);
+			MineceitCore::getItemHandler()->spawnHubItems($this);
+			$this->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . TextFormat::YELLOW . 'Unfollow: ' . $this->following);
+		}else{
+			$this->setGamemode(Player::SPECTATOR);
+			$this->getExtensions()->clearAll();
+			$this->sendMessage(MineceitUtil::getPrefix() . ' ' . TextFormat::RESET . TextFormat::GREEN . 'Following: ' . $name . ' | /follow to unfollow.');
+		}
+		$this->following = $name;
+	}
+
+	/**
+	 * @param bool $clearInv
+	 * @param bool $teleportSpawn
+	 */
+	public function reset(bool $clearInv = false, bool $teleportSpawn = false) : void{
+
+		$this->currentArena = null;
+
+		if($this->getExtensions()->isSpectator()){
+			$this->getExtensions()->setFakeSpectator(false);
+		}
+
+		$this->setGamemode(0);
+		$this->getKitHolder()->clearKit();
+		$this->extinguish();
+
+		if($this->isImmobile()){
+			$this->setImmobile(false);
+		}
+
+		if($this->combat){
+			$this->setInCombat(false, false);
+		}
+
+		if($this->throwPearl){
+			$this->setThrowPearl();
+		}
+
+		if($this->eatGap){
+			$this->setEatGap();
+		}
+
+		if($this->arrCD){
+			$this->setArrowCD();
+		}
+
+		if($clearInv){
+			$this->getExtensions()->clearAll();
+		}
+
+		if($teleportSpawn){
+			$level = $this->getServer()->getDefaultLevel();
+			if($level !== null){
+				$pos = $level->getSpawnLocation();
+				$this->teleport($pos);
+			}
+			$this->setAllowFlight($this->canFlyInLobby());
+		}
+	}
+
+	/**
+	 * Extinguishes the player.
+	 */
+	public function extinguish() : void{
+		parent::extinguish();
+		if(($duel = MineceitCore::getDuelHandler()->getDuel($this)) !== null){
+			$duel->setOnFire($this, false);
+		}
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Gets the followed.
+	 */
+	public function isFollowing() : bool{
+		return $this->following !== '';
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines whether the player can duel.
+	 */
+	public function canDuel() : bool{
+		return !$this->isFrozen() && !$this->isInEvent() && !$this->isInParty() && !$this->isInDuel() && !$this->isInArena() && !$this->isADuelSpec();
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player is in a party.
+	 */
+	public function isInParty() : bool{
+		$partyManager = MineceitCore::getPartyManager();
+		return $partyManager->getPartyFromPlayer($this) !== null;
+	}
+
+	/**
+	 * @return bool
+	 *
+	 * Determines if the player is in a duel.
+	 */
+	public function isInDuel() : bool{
+		$duelHandler = MineceitCore::getDuelHandler();
+		$duel = $duelHandler->getDuel($this);
+		return $duel !== null;
+	}
+
+	/**
+	 * @return bool
+	 */
+	public function isADuelSpec() : bool{
+		$duelHandler = MineceitCore::getDuelHandler();
+		$duel = $duelHandler->getDuelFromSpec($this);
+		return $duel !== null;
+	}
+
+	/**
+	 * @param int $action
+	 *
+	 * Tracks the player's current action.
+	 */
+	public function setAction(int $action) : void{
+		$currentTime = round(microtime(true) * 1000);
+
+		if($this->currentAction === -1){
+
+			$this->currentAction = $action;
+			$this->currentActionTime = $currentTime;
+			$this->lastAction = PlayerActionPacket::ACTION_ABORT_BREAK;
+			$this->lastActionTime = 0;
+		}else{
+
+			$this->lastAction = $this->currentAction;
+			$this->lastActionTime = $this->currentActionTime;
+
+			$this->currentAction = $action;
+			$this->currentActionTime = $currentTime;
+		}
+	}
+
+	/**
+	 * @param int $tickDiff
+	 *
+	 * Does the food tick.
+	 */
+	protected function doFoodTick(int $tickDiff = 1) : void{
+		$this->setFood($this->getMaxFood());
+		$this->setSaturation($this->getExtensions()->getMaxSaturation());
+	}
 }

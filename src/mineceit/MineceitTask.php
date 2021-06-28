@@ -1,171 +1,171 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-07-26
- * Time: 18:45
- */
 
 declare(strict_types=1);
 
 namespace mineceit;
 
-
-use mineceit\game\entities\ReplayHuman;
+use mineceit\discord\DiscordUtil;
+use mineceit\game\leaderboard\Leaderboards;
 use mineceit\player\MineceitPlayer;
+use pocketmine\scheduler\ClosureTask;
 use pocketmine\scheduler\Task;
 use pocketmine\Server;
 use pocketmine\utils\TextFormat;
 
-class MineceitTask extends Task
-{
+class MineceitTask extends Task{
 
-    /* @var Server */
-    private $server;
+	/* @var Server */
+	private $server;
 
-    /* @var MineceitCore */
-    private $core;
+	/* @var MineceitCore */
+	private $core;
 
-    /** @var int */
-    private $currentTick;
+	/** @var int */
+	private $currentTick;
 
-    public function __construct(MineceitCore $core)
-    {
-        $this->core = $core;
-        $this->server = $core->getServer();
-        $this->currentTick = 0;
-    }
+	/** @var int */
+	private $countdown;
 
-    /**
-     * Actions to execute when run
-     *
-     * @param int $currentTick
-     *
-     * @return void
-     */
-    public function onRun(int $currentTick) {
+	/** @var int */
+	private $leaderboardUpdateTicks;
+	/** @var int */
+	private $leaderboardReloadTicks;
 
-        $fiveSecs = MineceitUtil::secondsToTicks(5);
-        $mins = MineceitUtil::minutesToTicks(15);
+	/** @var Leaderboards */
+	private $leaderboards;
 
-        if($this->currentTick % $fiveSecs === 0 or $this->currentTick === 0) {
+	public function __construct(MineceitCore $core){
+		$this->core = $core;
+		$this->server = $core->getServer();
+		$this->currentTick = 0;
+		$this->countdown = 10;
+		$this->leaderboards = MineceitCore::getLeaderboards();
+		$this->leaderboardUpdateTicks = MineceitUtil::secondsToTicks(2);
+		$this->leaderboardReloadTicks = MineceitUtil::minutesToTicks(5);
+	}
 
-            $leaderboards = MineceitCore::getLeaderboards();
+	/**
+	 * Actions to execute when run
+	 *
+	 * @param int $currentTick
+	 *
+	 * @return void
+	 */
+	public function onRun(int $currentTick){
+		$sec = MineceitUtil::secondsToTicks(1);
+		$restarthours = MineceitUtil::hoursToTicks(4);
 
-            $leaderboards->reloadEloLeaderboards();
-            $leaderboards->reloadStatsLeaderboards();
-        }
+		$this->updateLeaderboards();
+		$this->updatePlayers();
 
-        $this->updatePlayers();
-        $this->updateEvents();
-        $this->updateDuels();
-        $this->updateReplays();
-        $this->updateParties();
+		MineceitCore::getEventManager()->update();
+		MineceitCore::getDuelHandler()->update();
+		MineceitCore::getBotHandler()->update();
+		MineceitCore::getReplayManager()->update();
+		MineceitCore::getPartyManager()->getEventManager()->update();
 
-        if($this->currentTick % $mins === 0) {
-            $this->clearEntities();
-        }
+		if($this->currentTick % $sec === 0){
+			$this->updateAuctionHouse();
+			MineceitCore::getDeleteBlocksHandler()->update();
+		}
 
-        $this->currentTick++;
-    }
+		if(($this->currentTick !== 0) && ($this->currentTick % $restarthours === 0)){
+			$this->core->getScheduler()->scheduleRepeatingTask(new ClosureTask(
+				function(int $currentTick2) : void{
+					if($this->countdown > 0) MineceitUtil::broadcastMessage('Server restart in ' . TextFormat::LIGHT_PURPLE . $this->countdown);
+					$this->countdown--;
+					if($this->countdown === -1){
+						$playerHandler = MineceitCore::getPlayerHandler();
+						$this->server->setConfigBool("white-list", true);
+						foreach($this->server->getOnlinePlayers() as $player){
+							if($player instanceof MineceitPlayer) $playerHandler->savePlayerData($player);
+							$player->transfer("zeqa.net", 19132);
+						}
+					}elseif($this->countdown === -90){
+						$this->server->shutdown();
+					}
+				}
+			), 20);
+		}
 
-    /**
-     * Updates all of the events in the server.
-     */
-    private function updateEvents() : void {
+		$this->currentTick++;
+	}
 
-        $events = MineceitCore::getEventManager();
-        $events = $events->getEvents();
+	/**
+	 * Updates the leaderbaord.
+	 */
+	private function updateLeaderboards() : void{
+		if($this->currentTick % $this->leaderboardReloadTicks === 0
+			|| $this->currentTick === 0){
+			$this->leaderboards->reloadEloLeaderboards();
+			$this->leaderboards->reloadStatsLeaderboards();
+			$this->broadcastMessage();
+			$this->sendOnlinePlayers();
+		}
 
-        foreach($events as $event) {
-            $event->update();
-        }
-    }
+		if($this->currentTick % $this->leaderboardUpdateTicks === 0){
+			$this->leaderboards->updateHolograms();
+		}
+	}
 
-    /**
-     *
-     * Updates the players in the server.
-     */
-    private function updatePlayers() : void {
+	/**
+	 * Boardcast message.
+	 */
+	private function broadcastMessage() : void{
+		$rnd = rand(0, 3);
+		if($rnd === 0){
+			MineceitUtil::broadcastMessage('Join our discord at' . TextFormat::LIGHT_PURPLE . ' discord.gg/zeqa');
+		}elseif($rnd === 1){
+			MineceitUtil::broadcastMessage('Donate for a rank at' . TextFormat::LIGHT_PURPLE . ' store.zeqa.net');
+		}elseif($rnd === 2){
+			MineceitUtil::broadcastMessage('Vote for ' . TextFormat::DARK_GREEN . 'Voter' . TextFormat::RESET . ' rank at' . TextFormat::GREEN . ' gg.gg/zeqavote');
+		}else{
+			MineceitUtil::broadcastMessage('This server is hosted by ' . TextFormat::LIGHT_PURPLE . 'Apex Hosting');
+		}
+	}
 
-        $players = $this->server->getOnlinePlayers();
+	/**
+	 * Send online-players to discord.
+	 */
+	private function sendOnlinePlayers() : void{
+		$title = DiscordUtil::boldText("Online-Players");
+		$players = $this->server->getOnlinePlayers();
+		$count = count($players);
+		if($count !== 0){
+			$playerNames = [];
+			foreach($players as $player){
+				if($player instanceof MineceitPlayer){
+					$playerNames[] = $player->getName();
+				}
+			}
+			$list = implode(", ", $playerNames);
+			$description = "  " . DiscordUtil::boldText("Players:") . " {$count}\n " . DiscordUtil::boldText("Lists:") . " {$list}";
+			DiscordUtil::sendOnlinePlayers($title, $description, DiscordUtil::BLUE);
+		}
+	}
 
-        foreach($players as $player) {
+	/**
+	 *
+	 * Updates the players in the server.
+	 */
+	private function updatePlayers() : void{
+		$players = $this->server->getOnlinePlayers();
+		foreach($players as $player){
+			if($player instanceof MineceitPlayer){
+				if($this->currentTick % 20 === 0){
+					$player->update();
+				}
+				$player->updateCps();
+				$player->updateNameTag();
+			}
+		}
+	}
 
-            if($player instanceof MineceitPlayer) {
-
-                if ($this->currentTick % 20 === 0) {
-                    $player->update();
-                }
-
-                if ($this->currentTick % 10 === 0) {
-                    $player->updateCPSTrackers($this->currentTick);
-                }
-
-                $player->updateCps();
-            }
-        }
-    }
-
-    /**
-     * Updates the duels.
-     */
-    private function updateDuels() : void {
-
-        $duelHandler = MineceitCore::getDuelHandler();
-
-        $duels = $duelHandler->getDuels();
-
-        foreach($duels as $duel)
-            $duel->update();
-    }
-
-
-    /**
-     * Updates the replays.
-     */
-    private function updateReplays() : void {
-
-        $replayHandler = MineceitCore::getReplayManager();
-
-        $replays = $replayHandler->getReplays();
-
-        foreach($replays as $replay)
-            $replay->update();
-    }
-
-    /**
-     * Clears the entities within a level.
-     */
-    private function clearEntities() : void {
-
-        $levels = $this->server->getLevels();
-
-        $defaultLevel = $this->server->getDefaultLevel();
-
-        foreach($levels as $level) {
-
-            // TODO DO MORE LEVELS
-
-            if($defaultLevel !== null and $defaultLevel->getId() === $level->getId()) {
-                $entities = $level->getEntities();
-                foreach($entities as $entity) {
-                    if($entity instanceof ReplayHuman){
-                        $entity->close();
-                    }
-                }
-            }
-        }
-    }
-
-
-    /**
-     * Updates the parties and party events.
-     */
-    private function updateParties() : void {
-
-        $partyManager = MineceitCore::getPartyManager();
-
-        $partyManager->getEventManager()->updateEvents();
-    }
+	/**
+	 * Updates the auction house item
+	 */
+	private function updateAuctionHouse() : void{
+		$auctionHouse = MineceitCore::getAuctionHouse();
+		$auctionHouse->updateAuctionHouse();
+	}
 }

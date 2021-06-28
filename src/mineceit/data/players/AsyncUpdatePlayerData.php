@@ -1,138 +1,121 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-11-19
- * Time: 22:47
- */
 
 declare(strict_types=1);
 
 namespace mineceit\data\players;
 
-
 use mineceit\data\mysql\MysqlStream;
 use mineceit\MineceitCore;
 use pocketmine\scheduler\AsyncTask;
 
-class AsyncUpdatePlayerData extends AsyncTask
-{
+class AsyncUpdatePlayerData extends AsyncTask{
 
-    /** @var bool */
-    private $isMysql = MineceitCore::MYSQL_ENABLED;
+	/** @var array */
+	private $data;
 
-    /** @var array */
-    private $data;
+	/** @var string */
+	private $path;
 
-    /** @var string */
-    private $name;
+	/** @var string -> The ip of the db */
+	private $host;
 
-    /** @var string */
-    private $path;
+	/** @var string */
+	private $username;
 
-    /** @var string -> The ip of the db */
-    private $host;
+	/** @var string */
+	private $password;
 
-    /** @var string */
-    private $username;
+	/** @var int */
+	private $port;
 
-    /** @var string */
-    private $password;
+	/** @var string */
+	private $database;
 
-    /** @var int */
-    private $port;
+	/** @var array */
+	private $queryStream;
 
-    /** @var string */
-    private $database;
+	public function __construct(string $path, MysqlStream $stream, array $values = []){
+		$this->path = $path;
+		$this->data = $values;
 
-    /** @var array */
-    private $queryStream;
+		$this->queryStream = $stream->getStream();
 
-    public function __construct(string $name, string $path, MysqlStream $stream, array $values = [])
-    {
-        $this->name = $name;
-        $this->path = $path;
-        $this->data = $values;
+		$this->host = $stream->host;
 
-        $this->queryStream = $stream->getStream();
+		$this->username = $stream->username;
 
-        $this->host = $stream->host;
+		$this->password = $stream->password;
 
-        $this->username = $stream->username;
+		$this->port = $stream->port;
 
-        $this->password = $stream->password;
+		$this->database = $stream->database;
+	}
 
-        $this->port = $stream->port;
+	/**
+	 * Actions to execute when run
+	 *
+	 * @return void
+	 */
+	public function onRun(){
 
-        $this->database = $stream->database;
-    }
+		if(!MineceitCore::MYSQL_ENABLED){
 
-    /**
-     * Actions to execute when run
-     *
-     * @return void
-     */
-    public function onRun()
-    {
-        if (!$this->isMysql) {
+			if(!file_exists($this->path)) return;
 
-            if(!file_exists($this->path)) return;
+			$info = (array) $this->data;
 
-            $info = (array)$this->data;
+			$parsed = yaml_parse_file($this->path);
 
-            $parsed = yaml_parse_file($this->path, 0);
+			$keys = array_keys($info);
 
-            $keys = array_keys($info);
+			foreach($keys as $key){
 
-            foreach($keys as $key) {
+				if(isset($parsed[$key], $info[$key])){
 
-                if (isset($parsed[$key], $info[$key])) {
+					$infoValue = $info[$key];
 
-                    $infoValue = $info[$key];
+					switch($key){
+						case 'permissions':
+						case 'elo':
+							$infoValue = (array) $info[$key];
+							break;
+					}
 
-                    switch($key) {
-                        case 'permissions':
-                        case 'elo':
-                            $infoValue = (array)$info[$key];
-                            break;
-                    }
+					if(is_array($infoValue)){
+						$parsedValue = $parsed[$key];
+						$parsedKeys = array_keys($parsedValue);
+						foreach($parsedKeys as $pKey){
+							if(isset($parsedValue[$pKey]) && !isset($infoValue[$pKey]))
+								$infoValue[$pKey] = $parsedValue[$pKey];
+						}
+					}
+					$parsed[$key] = $infoValue;
+				}
+			}
 
-                    if(is_array($infoValue)) {
-                        $parsedValue = $parsed[$key];
-                        $parsedKeys = array_keys($parsedValue);
-                        foreach($parsedKeys as $pKey) {
-                            if(isset($parsedValue[$pKey]) and !isset($infoValue[$pKey]))
-                                $infoValue[$pKey] = $parsedValue[$pKey];
-                        }
-                    }
-                    $parsed[$key] = $infoValue;
-                }
-            }
+			yaml_emit_file($this->path, $parsed);
+		}else{
 
-            yaml_emit_file($this->path, $parsed);
+			$stream = (array) $this->queryStream;
 
-        } else {
+			$mysql = new \mysqli($this->host, $this->username, $this->password, $this->database, $this->port);
 
-            $stream = (array)$this->queryStream;
+			if($mysql->connect_error){
+				var_dump("Unable to connect");
+				// TODO
+				return;
+			}
 
-            $mysql = new \mysqli($this->host, $this->username, $this->password, $this->database, $this->port);
+			foreach($stream as $query){
 
-            if ($mysql->connect_error) {
-                var_dump("Unable to connect");
-                // TODO
-                return;
-            }
+				$querySuccess = $mysql->query($query);
 
-            foreach($stream as $query) {
+				if($querySuccess === false){
+					var_dump("FAILED [UPDATE PLAYER DATA]: $query\n{$mysql->error}");
+				}
+			}
 
-                $querySuccess = $mysql->query($query);
-
-                if($querySuccess === FALSE) {
-                    var_dump("FAILED [UPDATE PLAYER DATA]: $query\n{$mysql->error}");
-                }
-            }
-
-            $mysql->close();
-        }
-    }
+			$mysql->close();
+		}
+	}
 }

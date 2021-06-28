@@ -1,10 +1,4 @@
 <?php
-/**
- * Created by PhpStorm.
- * User: jkorn2324
- * Date: 2019-11-21
- * Time: 23:59
- */
 
 declare(strict_types=1);
 
@@ -12,273 +6,267 @@ namespace mineceit\data\mysql;
 
 use mineceit\MineceitCore;
 
-class MysqlStream
-{
-
-
-    /** @var array */
-    private $stream;
-
-    /** @var string */
-    public $username;
-
-    /** @var string -> The ip of the db */
-    public $host;
-
-    /** @var string */
-    public $password;
-
-    /** @var int */
-    public $port;
-
-    /** @var string */
-    public $database;
-
-    /** @var array|MysqlTable[] */
-    private $tables = [];
-
-    public function __construct()
-    {
-        $data = MineceitCore::getMysqlData();
-        $this->username = strval($data['username']);
-        $this->host = strval($data['ip']);
-        $this->password = strval($data['password']);
-        $this->port = intval($data['port']);
-        $this->database = strval($data['database']);
-        $this->stream = [];
-    }
+class MysqlStream{
+
+	/** @var string */
+	public $username;
+	/** @var string -> The ip of the db */
+	public $host;
+	/** @var string */
+	public $password;
+	/** @var int */
+	public $port;
+	/** @var string */
+	public $database;
+	/** @var array */
+	private $stream;
+	/** @var array|MysqlTable[] */
+	private $tables = [];
+
+	public function __construct(){
+		$data = MineceitCore::getMysqlData();
+		$this->username = strval($data['username']);
+		$this->host = strval($data['ip']);
+		$this->password = strval($data['password']);
+		$this->port = intval($data['port']);
+		$this->database = strval($data['database']);
+		$this->stream = [];
+	}
+
+	/**
+	 * @param MysqlTable $table
+	 *
+	 * Adds to the stream a query to create a table.
+	 */
+	public function createTable(MysqlTable $table) : void{
+		$this->stream[] = $table->queryCreateTable();
+		$this->tables[$table->getName()] = $table;
+	}
+
+	/**
+	 * @param MysqlTable $table
+	 *
+	 * Adds to the stream a query to alter an existing table.
+	 */
+	public function alterTable(MysqlTable $table) : void{
+		$this->tables[$table->getName()] = $table;
+		$this->stream[] = $table->queryAlterTables();
+	}
+
+	/**
+	 * @param MysqlRow $row
+	 * @param array    $statements
+	 * @param string   $statementTable
+	 *
+	 * Adds to the stream a query to create a row.
+	 */
+	public function insertRow(MysqlRow $row, $statements = [], string $statementTable = '') : void{
+
+		$len = strlen($statementTable);
+
+		if($len > 0 && !isset($this->tables[$statementTable])) return;
+
+		$this->stream[] = $row->queryInsert($statements, $statementTable);
+	}
+
+
+	/**
+	 * @param MysqlRow $row
+	 *
+	 * Inserts a row, if it already exists it updates it.
+	 */
+	public function insertNUpdate(MysqlRow $row) : void{
+
+		$this->stream[] = $row->queryInsertNUpdate();
+	}
+
+	/**
+	 * @param MysqlRow $row
+	 * @param array    $statements
+	 *
+	 * Adds to the stream a query to update a row.
+	 */
+	public function updateRow(MysqlRow $row, $statements = []) : void{
+
+		$this->stream[] = $row->queryUpdate($statements);
+	}
+
+	/**
+	 * @param string $table
+	 * @param array  $statement
+	 *
+	 * Removes a row in a table.
+	 */
+	public function removeRows(string $table, $statement = []) : void{
+
+		$stream = "DELETE FROM {$table}";
+
+		$len = count($statement);
+
+		if($len > 0){
+
+			$implode = implode(" AND ", $statement);
+
+			$stream .= " WHERE {$implode}";
+		}
 
-    /**
-     * @param MysqlTable $table
-     *
-     * Adds to the stream a query to create a table.
-     */
-    public function createTable(MysqlTable $table) : void {
-        $this->stream[] = $table->queryCreateTable();
-        $this->tables[$table->getName()] = $table;
-    }
+		$this->stream[] = $stream;
+	}
 
-    /**
-     * @param MysqlTable $table
-     *
-     * Adds to the stream a query to alter an existing table.
-     */
-    public function alterTable(MysqlTable $table) : void {
-        $this->tables[$table->getName()] = $table;
-        $this->stream[] = $table->queryAlterTables();
-    }
 
-    /**
-     * @param MysqlRow $row
-     * @param array $statements
-     * @param string $statementTable
-     *
-     * Adds to the stream a query to create a row.
-     */
-    public function insertRow(MysqlRow $row, $statements = [], string $statementTable = '') : void {
+	/**
+	 * @param array $tables
+	 * @param array $statements
+	 * @param array $values
+	 *
+	 * Adds the select query string.
+	 */
+	public function selectTables($tables = [], $statements = [], $values = []) : void{
 
-        $len = strlen($statementTable);
+		$tables = implode(', ', $tables);
 
-        if($len > 0 and !isset($this->tables[$statementTable])) return;
+		$len = count($values);
 
-        $this->stream[] = $row->queryInsert($statements, $statementTable);
-    }
+		$value = "*";
 
+		if($len > 0)
+			$value = implode(", ", $values);
 
-    /**
-     * @param MysqlRow $row
-     *
-     * Inserts a row, if it already exists it updates it.
-     */
-    public function insertNUpdate(MysqlRow $row) : void {
+		$query = "SELECT {$value} FROM {$tables}";
 
-        $this->stream[] = $row->queryInsertNUpdate();
-    }
+		$length = count($statements);
 
-    /**
-     * @param MysqlRow $row
-     * @param array $statements
-     *
-     * Adds to the stream a query to update a row.
-     */
-    public function updateRow(MysqlRow $row, $statements = []) : void {
+		if($length > 0){
 
-        $this->stream[] = $row->queryUpdate($statements);
-    }
+			$statement = implode(" AND ", $statements);
 
-    /**
-     * @param string $table
-     * @param array $statement
-     *
-     * Removes a row in a table.
-     */
-    public function removeRows(string $table, $statement = []) : void {
+			$query .= " WHERE $statement";
+		}
 
-        $stream = "DELETE FROM {$table}";
+		$this->stream[] = $query;
+	}
 
-        $len = count($statement);
 
-        if($len > 0) {
+	/**
+	 * @param array $tables
+	 * @param array $values
+	 *
+	 * Selects the tables in order by descending.
+	 */
+	public function selectTablesInOrder($tables = [], $values = []) : void{
 
-            $implode = implode(" AND ", $statement);
+		$value = "*";
+		$len = count($values);
 
-            $stream .= " WHERE {$implode}";
-        }
+		$keys = array_keys($values);
 
-        $this->stream[] = $stream;
-    }
+		if($len > 0){
+			$value = implode(', ', $keys);
+		}
 
+		$table = implode(', ', $tables);
 
-    /**
-     * @param array $tables
-     * @param array $statements
-     * @param array $values
-     *
-     * Adds the select query string.
-     */
-    public function selectTables($tables = [], $statements = [], $values = []) : void {
+		$orders = [];
+		foreach($keys as $key){
+			$v = $values[$key];
+			if($v) $orders[] = "{$key} DESC";
+		}
 
-        $tables = implode(', ', $tables);
+		$len = count($orders);
+		$order = "";
+		if($len > 0){
+			$order = " ORDER BY " . implode(", ", $orders);
+		}
 
-        $len = count($values);
 
-        $value = "*";
+		$query = "SELECT {$value} FROM {$table}{$order}";
 
-        if($len > 0)
-            $value = implode(", ", $values);
+		$this->stream[] = $query;
+	}
 
-        $query = "SELECT {$value} FROM {$tables}";
 
-        $length = count($statements);
+	/**
+	 * @param string $table
+	 * @param array  $rows
+	 * @param bool   $inOrder
+	 *
+	 * Adds to the query the average rows.
+	 */
+	public function selectAverageRows(string $table, array $rows, bool $inOrder = true) : void{
 
-        if($length > 0) {
+		$averageRows = [];
+		$otherRows = [];
 
-            $statement = implode(" AND ", $statements);
+		$keys = array_keys($rows);
 
-            $query .= " WHERE $statement";
-        }
+		foreach($keys as $key){
+			$row = $rows[$key];
+			$string = "{$table}.{$key}";
+			if($row)
+				$averageRows[] = $string;
+			else $otherRows[] = $string;
+		}
 
-        $this->stream[] = $query;
-    }
+		$length = strval(count($averageRows));
 
+		$avgRows = "(" . implode(" + ", $averageRows) . ") / {$length}";
 
-    /**
-     * @param array $tables
-     * @param array $values
-     *
-     * Selects the tables in order by descending.
-     */
-    public function selectTablesInOrder($tables = [], $values = []) : void {
+		$otherRowLength = count($otherRows);
 
-        $value = "*";
-        $len = count($values);
+		$otherRowStr = "";
 
-        $keys = array_keys($values);
+		if($otherRowLength > 0)
+			$otherRowStr = ', ' . implode(", ", $otherRows);
 
-        if($len > 0) {
-            $value = implode(', ', $keys);
-        }
+		$query = "SELECT @AVERAGE := {$avgRows}{$otherRowStr} FROM {$table}";
 
-        $table = implode(', ', $tables);
+		$inOrderString = ($inOrder) ? " ORDER BY @AVERAGE DESC" : "";
 
-        $orders = [];
-        foreach($keys as $key) {
-            $v = $values[$key];
-            if($v) $orders[] = "{$key} DESC";
-        }
+		$this->stream[] = $query . $inOrderString;
+	}
 
-        $len = count($orders);
-        $order = "";
-        if($len > 0) {
-            $order = " ORDER BY " . implode(", ", $orders);
-        }
+	/**
+	 * @param string $table
+	 * @param string $dividend
+	 * @param string $divisor
+	 * @param bool   $inOrder
+	 *
+	 * Adds to the query the division of two columns in the same table.
+	 */
+	public function selectDividedColumnsOfRows(string $table, string $dividend, string $divisor, bool $inOrder = true) : void{
 
+		// SELECT @RESULT = $dividend / $divisor FROM $table ORDER BY @RESULT DESC
 
-        $query = "SELECT {$value} FROM {$table}{$order}";
+		if($divisor === 0) $divisor = 1;
 
-        $this->stream[] = $query;
-    }
+		$result = "SELECT @RESULT := ROUND({$dividend}/{$divisor}), username FROM {$table}";
 
+		if($inOrder){
+			$result .= " ORDER BY @RESULT DESC";
+		}
 
-    /**
-     * @param string $table
-     * @param array $rows
-     * @param bool $inOrder
-     *
-     * Adds to the query the average rows.
-     */
-    public function selectAverageRows(string $table, array $rows, bool $inOrder = true) : void {
+		$this->stream[] = $result;
+	}
 
-        $averageRows = [];
-        $otherRows = [];
+	/**
+	 * @param string $table
+	 *
+	 * @return array
+	 *
+	 * Gets the columns of a particular table.
+	 */
+	public function getColumnsOf(string $table) : array{
+		if(isset($this->tables[$table]))
+			return $this->tables[$table]->getColumns();
+		return [];
+	}
 
-        $keys = array_keys($rows);
-
-        foreach($keys as $key) {
-            $row = $rows[$key];
-            $string = "{$table}.{$key}";
-            if($row)
-                $averageRows[] = $string;
-            else $otherRows[] = $string;
-        }
-
-        $length = strval(count($averageRows));
-
-        $avgRows = "(" . implode(" + ", $averageRows) . ") / {$length}";
-
-        $otherRowLength = count($otherRows);
-
-        $otherRowStr = "";
-
-        if($otherRowLength > 0)
-            $otherRowStr = ', ' . implode(", ", $otherRows);
-
-        $query = "SELECT @AVERAGE := {$avgRows}{$otherRowStr} FROM {$table}";
-
-        $inOrderString = ($inOrder) ? " ORDER BY @AVERAGE DESC" : "";
-
-        $this->stream[] = $query . $inOrderString;
-    }
-
-    /**
-     * @param string $table
-     * @param string $dividend
-     * @param string $divisor
-     * @param bool $inOrder
-     *
-     * Adds to the query the division of two columns in the same table.
-     */
-    public function selectDividedColumnsOfRows(string $table, string $dividend, string $divisor, bool $inOrder = true) : void {
-
-        // SELECT @RESULT = $dividend / $divisor FROM $table ORDER BY @RESULT DESC
-
-        $result = "SELECT @RESULT := ROUND({$dividend}/{$divisor}) FROM {$table}";
-
-        if($inOrder) {
-            $result .= " ORDER BY @RESULT DESC";
-        }
-
-        $this->stream[] = $result;
-    }
-
-    /**
-     * @param string $table
-     * @return array
-     *
-     * Gets the columns of a particular table.
-     */
-    public function getColumnsOf(string $table) : array {
-        if(isset($this->tables[$table]))
-            return $this->tables[$table]->getColumns();
-        return [];
-    }
-
-    /**
-     * @return array
-     *
-     * Returns the stream.
-     */
-    public function getStream() : array {
-        return $this->stream;
-    }
+	/**
+	 * @return array
+	 *
+	 * Returns the stream.
+	 */
+	public function getStream() : array{
+		return $this->stream;
+	}
 }
